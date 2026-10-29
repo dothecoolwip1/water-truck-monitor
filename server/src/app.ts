@@ -76,7 +76,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   await app.register(fileRoutes, { prefix: '/api' });
 
   if ((deps.serveWeb ?? true) && fs.existsSync(config.webDist)) {
-    await app.register(fastifyStatic, { root: config.webDist, wildcard: false });
+    await app.register(fastifyStatic, { root: config.webDist });
     // Client-side routing: unknown non-API paths load the web app.
     app.setNotFoundHandler((req, reply) => {
       if (req.url.startsWith('/api/')) return reply.status(404).send({ error: 'Not found' });
