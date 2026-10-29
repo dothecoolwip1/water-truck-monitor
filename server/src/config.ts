@@ -14,6 +14,13 @@ function findServerRoot(): string {
 }
 const serverRoot = findServerRoot();
 
+// Local development reads settings from a .env file at the repository root.
+try {
+  process.loadEnvFile(path.resolve(serverRoot, '../.env'));
+} catch {
+  // No .env file: settings come from the real environment.
+}
+
 function required(name: string, fallback?: string): string {
   const v = process.env[name] ?? fallback;
   if (v === undefined || v === '') throw new Error(`Missing required environment variable ${name}`);

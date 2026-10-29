@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import L from 'leaflet';
 import { CircleMarker, MapContainer, Marker, Polyline, TileLayer, Tooltip, useMap } from 'react-leaflet';
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
@@ -24,11 +24,26 @@ const truckIcon = (label: string) =>
 function FitTo({ points }: { points: [number, number][] }) {
   const map = useMap();
   const key = points.map((p) => p.join(',')).join(';');
+  const latest = useRef(points);
+  latest.current = points;
+
+  const fit = useCallback(() => {
+    const pts = latest.current;
+    if (pts.length === 1) map.setView(pts[0], 15);
+    else if (pts.length > 1) map.fitBounds(L.latLngBounds(pts), { padding: [30, 30], maxZoom: 16 });
+  }, [map]);
+
+  useEffect(fit, [key, fit]);
+
+  // The page layout can change the map's size after it is drawn; refit when it does.
   useEffect(() => {
-    if (points.length === 1) map.setView(points[0], 15);
-    else if (points.length > 1) map.fitBounds(L.latLngBounds(points), { padding: [30, 30], maxZoom: 16 });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, map]);
+    const ro = new ResizeObserver(() => {
+      map.invalidateSize();
+      fit();
+    });
+    ro.observe(map.getContainer());
+    return () => ro.disconnect();
+  }, [map, fit]);
   return null;
 }
 

@@ -64,7 +64,9 @@ export function ticketPdf(job: Record<string, any>, images: { meterPhoto?: Buffe
         doc.text('(signature could not be shown)', 318, imgTop + 14);
       }
     }
-    doc.fontSize(8).fillColor('#999').text(`Generated ${fmtTime(new Date())}`, 54, 730, { align: 'center', width: 504 });
+    // Writing inside the bottom margin would start a second page.
+    doc.page.margins.bottom = 0;
+    doc.fontSize(8).fillColor('#999').text(`Generated ${fmtTime(new Date())}`, 54, 750, { align: 'center', width: 504, lineBreak: false });
     doc.end();
   });
 }
