@@ -1,4 +1,4 @@
-import { useMemo, useState, type DragEvent } from 'react';
+import { useEffect, useMemo, useState, type DragEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { post, type Job, type LivePosition, type User } from '../api';
 import JobForm from '../components/JobForm';
@@ -43,6 +43,16 @@ export default function Dispatch() {
       });
     }
   });
+
+  // Live events cover most changes; a slow poll catches anything missed (and is
+  // the only source of updates where the host doesn't support streaming).
+  useEffect(() => {
+    const timer = setInterval(() => {
+      refreshJobs();
+      refreshPositions();
+    }, connected ? 60_000 : 15_000);
+    return () => clearInterval(timer);
+  }, [connected, refreshJobs, refreshPositions]);
 
   const columns = useMemo(() => {
     const assigned = (dayJobs.data ?? []).filter((j) => j.driver_id && j.status !== 'cancelled');

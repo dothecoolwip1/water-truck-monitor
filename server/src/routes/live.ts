@@ -22,6 +22,8 @@ const routes: FastifyPluginAsync = async (app) => {
   // Server-sent events so dispatch screens update without refreshing. EventSource
   // can't set headers, so the token comes in the query string.
   app.get('/live/stream', async (req, reply) => {
+    // Serverless hosts can't fan events out between instances; the office app polls instead.
+    if (process.env.LIVE_STREAM === 'off') return reply.status(204).send();
     const { token } = z.object({ token: z.string() }).parse(req.query);
     try {
       const user = app.jwt.verify<{ role: string }>(token);

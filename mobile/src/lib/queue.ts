@@ -13,7 +13,8 @@ import type { GpsPoint, Op, PhotoRef, Problem } from './types';
 const QUEUE_KEY = 'wt.queue';
 const GPS_KEY = 'wt.gps';
 const PROBLEMS_KEY = 'wt.problems';
-const MAX_BATCH_BYTES = 6_000_000;
+// Some hosts cap request bodies at 4.5 MB.
+const MAX_BATCH_BYTES = 3_500_000;
 
 let lock: Promise<unknown> = Promise.resolve();
 function withLock<T>(fn: () => Promise<T>): Promise<T> {
