@@ -1,19 +1,19 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
-  ActionIcon, Alert, Anchor, Badge, Box, Button, Card, Checkbox, Grid, Group, NumberInput, ScrollArea, SimpleGrid, Stack, Table, Text, TextInput, Textarea, Title, UnstyledButton,
+  ActionIcon, Alert, Anchor, Badge, Box, Button, Card, Checkbox, Grid, Group, MultiSelect, NumberInput, ScrollArea, Select, SimpleGrid, Switch, Stack, Table, Text, TextInput, Textarea, Title, UnstyledButton,
 } from '@mantine/core';
 import { Dropzone } from '@mantine/dropzone';
 import {
-  IconArrowLeft, IconChevronRight, IconFileSpreadsheet, IconHome, IconMail, IconMapPin, IconPencil, IconPhone, IconPlus, IconSearch, IconUpload, IconUsers,
+  IconArrowLeft, IconBellRinging, IconHeartbeat, IconSpeakerphone, IconChevronRight, IconFileSpreadsheet, IconHome, IconMail, IconMapPin, IconPencil, IconPhone, IconPlus, IconSearch, IconUpload, IconUsers,
 } from '@tabler/icons-react';
-import { patch, post, type Customer, type Job, type Site } from '../api';
+import { patch, post, type Customer, type Job, type Settings, type Site } from '../api';
 import JobMap, { type PickedPoint } from '../components/Map';
 import { EmptyState, PageHeader, Sheet, useIsMobile } from '../components/ui';
 import { csvObjects } from '../csv';
 import { RecurringSection } from '../components/Recurring';
 import { RatesSection } from '../components/Rates';
-import { notifyOk, useApi, useInvalidate } from '../hooks';
+import { notifyError, notifyOk, useApi, useInvalidate } from '../hooks';
 import { litres } from '../format';
 
 /** Sites shown on the map look like jobs to the map component. */
@@ -34,6 +34,9 @@ export default function Customers() {
   const [editingCustomer, setEditingCustomer] = useState<Customer | 'new' | null>(null);
   const [editingSite, setEditingSite] = useState<Site | 'new' | null>(null);
   const [importing, setImporting] = useState(false);
+  const [notice, setNotice] = useState(false);
+  const settings = useApi<Settings>('/settings');
+  const classLabel = (k: string | undefined) => settings.data?.classes.find((c) => c.key === k)?.label ?? k ?? '';
 
   const list = useMemo(() => {
     const n = q.trim().toLowerCase();
@@ -86,7 +89,15 @@ export default function Customers() {
             <Title order={3}>{current.name}</Title>
             {!current.active && <Badge color="gray">Inactive</Badge>}
           </Group>
-          <Text size="sm" c="dimmed">{current.account_code ?? 'No account code'}</Text>
+          <Group gap={6} mt={2}>
+            <Text size="sm" c="dimmed">{current.account_code ?? 'No account code'}</Text>
+            <Badge size="sm" variant="light" color="gray">{classLabel(current.customer_class)}</Badge>
+            {(current.notify_sms || current.notify_email) && (
+              <Badge size="sm" variant="light" color="water" leftSection={<IconBellRinging size={11} />}>
+                Alerts by {[current.notify_sms && 'text', current.notify_email && 'email'].filter(Boolean).join(' and ')}
+              </Badge>
+            )}
+          </Group>
         </Box>
         <ActionIcon variant="default" size="lg" onClick={() => setEditingCustomer(current)} aria-label="Edit customer"><IconPencil size={18} /></ActionIcon>
       </Group>
@@ -109,7 +120,7 @@ export default function Customers() {
               <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
                 <IconHome size={20} color="var(--mantine-color-water-6)" />
                 <Box style={{ minWidth: 0 }}>
-                  <Text fw={600} size="sm" truncate>{s.label}</Text>
+                  <Group gap={6} wrap="nowrap"><Text fw={600} size="sm" truncate>{s.label}</Text>{s.critical && <Badge size="xs" color="red" variant="light" leftSection={<IconHeartbeat size={11} />}>Critical</Badge>}</Group>
                   <Text size="xs" c="dimmed" truncate>{s.address ?? 'No address'} · tank {litres(s.tank_capacity_l)} · arrival within {s.geofence_m} m</Text>
                   {s.lat === null && <Text size="xs" c="red">Not on the map yet, so arrival can't be detected</Text>}
                 </Box>
@@ -138,6 +149,7 @@ export default function Customers() {
           subtitle={`${customers.data?.length ?? 0} customers · ${sites.data?.length ?? 0} delivery points`}
           actions={
             <>
+              <Button variant="default" leftSection={<IconSpeakerphone size={16} />} onClick={() => setNotice(true)}>Send notice</Button>
               <Button variant="default" leftSection={<IconUpload size={16} />} onClick={() => setImporting(true)}>Import</Button>
               <Button leftSection={<IconPlus size={16} />} onClick={() => setEditingCustomer('new')}>Add customer</Button>
             </>
@@ -155,6 +167,7 @@ export default function Customers() {
         {editingCustomer && (
           <CustomerForm
             customer={editingCustomer === 'new' ? null : editingCustomer}
+            classes={settings.data?.classes ?? []}
             onCancel={() => setEditingCustomer(null)}
             onSaved={(c) => { setEditingCustomer(null); navigate(`/customers/${c.id}`); }}
           />
@@ -165,6 +178,9 @@ export default function Customers() {
           <SiteForm customerId={current.id} site={editingSite === 'new' ? null : editingSite} onCancel={() => setEditingSite(null)} onSaved={() => setEditingSite(null)} />
         )}
       </Sheet>
+      <Sheet opened={notice} onClose={() => setNotice(false)} title="Send a notice to residents" size="md">
+        {notice && <NoticeForm classes={settings.data?.classes ?? []} onDone={() => setNotice(false)} />}
+      </Sheet>
       <Sheet opened={importing} onClose={() => setImporting(false)} title="Import customers from a spreadsheet" size="xl">
         <ImportForm onDone={() => setImporting(false)} />
       </Sheet>
@@ -172,18 +188,19 @@ export default function Customers() {
   );
 }
 
-function CustomerForm({ customer, onCancel, onSaved }: { customer: Customer | null; onCancel: () => void; onSaved: (c: Customer) => void }) {
+function CustomerForm({ customer, classes, onCancel, onSaved }: { customer: Customer | null; classes: Settings['classes']; onCancel: () => void; onSaved: (c: Customer) => void }) {
   const invalidate = useInvalidate();
   const [f, setF] = useState({
     name: customer?.name ?? '', account_code: customer?.account_code ?? '', phone: customer?.phone ?? '',
     email: customer?.email ?? '', notes: customer?.notes ?? '', active: customer?.active ?? true,
+    customer_class: customer?.customer_class ?? 'residential', notify_sms: customer?.notify_sms ?? false, notify_email: customer?.notify_email ?? false,
   });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
-    const body = { ...f, account_code: f.account_code || null, phone: f.phone || null, email: f.email || null, notes: f.notes || null };
+    const body = { ...f, account_code: f.account_code || null, phone: f.phone || null, email: f.email || null, notes: f.notes || null, notify_sms: f.notify_sms && !!f.phone, notify_email: f.notify_email && !!f.email };
     try {
       const saved = customer ? await patch<Customer>(`/customers/${customer.id}`, body) : await post<Customer>('/customers', body);
       await invalidate('/customers');
@@ -203,6 +220,15 @@ function CustomerForm({ customer, onCancel, onSaved }: { customer: Customer | nu
           <TextInput label="Phone" type="tel" inputMode="tel" value={f.phone} onChange={(e) => setF({ ...f, phone: e.currentTarget.value })} />
         </SimpleGrid>
         <TextInput label="Email" type="email" inputMode="email" value={f.email} onChange={(e) => setF({ ...f, email: e.currentTarget.value })} />
+        <Select label="Customer class" description="Sets which rates they pay" data={classes.map((c) => ({ value: c.key, label: c.label }))}
+          value={f.customer_class} allowDeselect={false} onChange={(v) => setF({ ...f, customer_class: v ?? 'residential' })} />
+        <Box>
+          <Text size="sm" fw={500} mb={6}>Delivery alerts</Text>
+          <Stack gap={8}>
+            <Switch label="Text messages" description={!f.phone ? 'Add a phone number first' : undefined} disabled={!f.phone} checked={f.notify_sms && !!f.phone} onChange={(e) => setF({ ...f, notify_sms: e.currentTarget.checked })} />
+            <Switch label="Email" description={!f.email ? 'Add an email address first' : undefined} disabled={!f.email} checked={f.notify_email && !!f.email} onChange={(e) => setF({ ...f, notify_email: e.currentTarget.checked })} />
+          </Stack>
+        </Box>
         <Textarea label="Notes" autosize minRows={2} value={f.notes} onChange={(e) => setF({ ...f, notes: e.currentTarget.value })} />
         {customer && <Checkbox label="Active" checked={f.active} onChange={(e) => setF({ ...f, active: e.currentTarget.checked })} />}
         {error && <Alert color="red">{error}</Alert>}
@@ -217,7 +243,7 @@ function SiteForm({ customerId, site, onCancel, onSaved }: { customerId: string;
   const [f, setF] = useState({
     label: site?.label ?? '', address: site?.address ?? '', lat: site?.lat ?? (null as number | null), lng: site?.lng ?? (null as number | null),
     geofence_m: site?.geofence_m ?? 75, tank_capacity_l: (site?.tank_capacity_l ?? '') as number | string, access_notes: site?.access_notes ?? '',
-    active: site?.active ?? true,
+    active: site?.active ?? true, critical: site?.critical ?? false,
   });
   const [house, setHouse] = useState<PickedPoint['building']>(null);
   const [error, setError] = useState<string | null>(null);
@@ -274,12 +300,48 @@ function SiteForm({ customerId, site, onCancel, onSaved }: { customerId: string;
               <NumberInput label="Arrival radius (m)" min={10} max={2000} value={f.geofence_m} onChange={(v) => setF({ ...f, geofence_m: Number(v) || 75 })} />
             </SimpleGrid>
             <Textarea label="Access notes for drivers" autosize minRows={2} value={f.access_notes} onChange={(e) => setF({ ...f, access_notes: e.currentTarget.value })} placeholder="Fill pipe on north side; dog in yard" />
+            <Checkbox label="Critical site" description="A clinic, elder or medical need. Shown first when running low." checked={f.critical} onChange={(e) => setF({ ...f, critical: e.currentTarget.checked })} />
             {site && <Checkbox label="Active" checked={f.active} onChange={(e) => setF({ ...f, active: e.currentTarget.checked })} />}
             {error && <Alert color="red">{error}</Alert>}
           </Stack>
         </Grid.Col>
       </Grid>
       <Group justify="flex-end" mt="lg"><Button variant="default" onClick={onCancel}>Cancel</Button><Button type="submit" loading={busy}>Save</Button></Group>
+    </form>
+  );
+}
+
+function NoticeForm({ classes, onDone }: { classes: Settings['classes']; onDone: () => void }) {
+  const [body, setBody] = useState('');
+  const [subject, setSubject] = useState('');
+  const [who, setWho] = useState<string[]>([]);
+  const [sms, setSms] = useState(true);
+  const [email, setEmail] = useState(true);
+  const [busy, setBusy] = useState(false);
+  async function send(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const r = await post<{ recipients: number; sent: number; skipped: number; failed: number }>('/notices', { body, subject: subject || undefined, classes: who.length ? who : undefined, sms, email });
+      if (!r.recipients) notifyOk('Nobody matched. Only customers who opted in to alerts get notices.');
+      else notifyOk(`Notice to ${r.recipients} ${r.recipients === 1 ? 'customer' : 'customers'}: ${r.sent} sent${r.skipped ? `, ${r.skipped} skipped` : ''}${r.failed ? `, ${r.failed} failed` : ''}`);
+      onDone();
+    } catch (err) {
+      notifyError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <form onSubmit={send}>
+      <Stack>
+        <Textarea label="Message" required autosize minRows={3} maxLength={600} placeholder="e.g. No deliveries Monday. The fill station is down for repairs." value={body} onChange={(e) => setBody(e.currentTarget.value)} data-autofocus
+          description={`${body.length}/600. Texts over 160 characters are sent as two or more messages.`} />
+        <TextInput label="Email subject" placeholder="Optional" value={subject} onChange={(e) => setSubject(e.currentTarget.value)} />
+        <MultiSelect label="Who" placeholder={who.length ? undefined : 'Everyone who opted in'} data={classes.map((c) => ({ value: c.key, label: c.label }))} value={who} onChange={setWho} clearable />
+        <Group gap="lg"><Switch label="Text" checked={sms} onChange={(e) => setSms(e.currentTarget.checked)} /><Switch label="Email" checked={email} onChange={(e) => setEmail(e.currentTarget.checked)} /></Group>
+        <Group justify="flex-end"><Button variant="default" onClick={onDone}>Cancel</Button><Button type="submit" loading={busy} disabled={body.trim().length < 3 || (!sms && !email)}>Send notice</Button></Group>
+      </Stack>
     </form>
   );
 }

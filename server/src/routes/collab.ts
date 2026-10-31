@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { tx } from '../db.js';
 import { addComment, listComments } from '../lib/comments.js';
-import { getSettings, updateSettings } from '../lib/settings.js';
+import { getSettings, publicSettings, updateSettings } from '../lib/settings.js';
 import { anyUser, office, parse, requireRole, uuid } from '../http.js';
 
 const routes: FastifyPluginAsync = async (app) => {
@@ -59,7 +59,7 @@ const routes: FastifyPluginAsync = async (app) => {
   });
 
   // ----- Settings -----
-  app.get('/settings', { preHandler: office }, async () => getSettings(app.pool));
+  app.get('/settings', { preHandler: office }, async () => publicSettings(await getSettings(app.pool)));
   app.patch('/settings', { preHandler: requireRole('admin') }, async (req) => {
     const b = parse(
       z.object({
@@ -77,10 +77,15 @@ const routes: FastifyPluginAsync = async (app) => {
             required: z.boolean().optional(),
           })).max(20),
         }),
+        inspection: z.object({ required: z.boolean(), items: z.array(z.string().trim().min(1).max(80)).max(40) }).partial(),
+        alerts: z.object({ sms: z.boolean(), email: z.boolean(), on_scheduled: z.boolean(), on_en_route: z.boolean(), on_completed: z.boolean() }).partial(),
+        classes: z.array(z.object({ key: z.string().regex(/^[a-z0-9_]{1,40}$/), label: z.string().min(1).max(60) })).min(1).max(12),
+        depot: z.object({ lat: z.number().min(-90).max(90).nullable(), lng: z.number().min(-180).max(180).nullable(), label: z.string().max(80) }).partial(),
+        forecast: z.object({ warn_days: z.number().int().min(1).max(30) }).partial(),
       }).partial(),
       req.body,
     );
-    return updateSettings(app.pool, b);
+    return publicSettings(await updateSettings(app.pool, b));
   });
 };
 

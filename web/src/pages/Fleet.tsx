@@ -7,6 +7,7 @@ import { IconBell, IconBellOff, IconCheck, IconCopy, IconDots, IconGauge, IconKe
 import { patch, post, type Tank, type Truck, type User } from '../api';
 import { useAuth } from '../auth';
 import { PageHeader, Sheet } from '../components/ui';
+import { TruckUptime, UptimeCards } from '../components/Uptime';
 import { notifyError, useApi, useInvalidate } from '../hooks';
 import { ago, litres } from '../format';
 
@@ -47,6 +48,7 @@ export default function Fleet() {
   const [truck, setTruck] = useState<Truck | 'new' | null>(null);
   const [person, setPerson] = useState<User | 'new' | null>(null);
   const [tank, setTank] = useState<Tank | 'new' | null>(null);
+  const [uptime, setUptime] = useState<string | null>(null);
   const [newKey, setNewKey] = useState<{ device_id: string; device_key: string } | null>(null);
 
   function rotate(t: Tank) {
@@ -82,6 +84,13 @@ export default function Fleet() {
         </Tabs.List>
       </Tabs>
 
+      {tab === 'trucks' && (
+        <Stack gap="xs" mb="lg">
+          <Text fw={650}>Road readiness</Text>
+          <UptimeCards onOpen={(t) => setUptime(t.id)} />
+          <Text fw={650} mt="md">Truck details</Text>
+        </Stack>
+      )}
       {tab === 'trucks' && (
         <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="md">
           {(trucks.data ?? []).map((t) => (
@@ -173,6 +182,9 @@ export default function Fleet() {
 
       <Sheet opened={!!truck} onClose={() => setTruck(null)} title={truck === 'new' ? 'Add truck' : 'Edit truck'} size="md">
         {truck && <TruckForm truck={truck === 'new' ? null : truck} onCancel={() => setTruck(null)} onSaved={() => { setTruck(null); void invalidate('/trucks'); }} />}
+      </Sheet>
+      <Sheet opened={!!uptime} onClose={() => setUptime(null)} title={trucks.data?.find((x) => x.id === uptime)?.name ?? 'Truck'} size="lg">
+        {uptime && <TruckUptime truckId={uptime} onClose={() => setUptime(null)} />}
       </Sheet>
       <Sheet opened={!!person} onClose={() => setPerson(null)} title={person === 'new' ? 'Add person' : 'Edit person'} size="md">
         {person && <PersonForm person={person === 'new' ? null : person} onCancel={() => setPerson(null)} onSaved={() => { setPerson(null); void invalidate('/users'); }} />}

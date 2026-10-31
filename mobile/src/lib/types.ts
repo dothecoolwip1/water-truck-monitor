@@ -39,7 +39,15 @@ export interface Truck {
   plate: string | null;
   capacity_l: number;
   last_meter_reading: number | null;
+  odometer_km?: number | string | null;
+  engine_hours?: number | string | null;
+  out_of_service?: boolean;
+  out_of_service_reason?: string | null;
+  /** When this truck was last inspected today, or null. */
+  inspected_at?: string | null;
 }
+
+export interface InspectionItem { label: string; ok: boolean; note?: string | null }
 
 export interface SourceTank {
   id: string;
@@ -64,6 +72,7 @@ export interface Today {
   tanks: SourceTank[];
   server_time: string;
   form_fields?: FormField[];
+  inspection?: { required: boolean; items: string[] };
 }
 
 /** A question the office added to the delivery checklist. */
@@ -111,6 +120,16 @@ export type Op =
       meter_photo?: PhotoRef | null;
       signature?: PhotoRef | null;
       form_data?: Record<string, FormValue> | null;
+    }
+  | {
+      type: 'inspection';
+      client_id: string;
+      at: string;
+      truck_id: string;
+      odometer_km?: number | null;
+      engine_hours?: number | null;
+      items: InspectionItem[];
+      notes?: string | null;
     }
   | { type: 'comment'; client_id: string; at: string; job_id: string; body: string }
   | { type: 'fill'; client_id: string; started_at: string; ended_at: string; tank_id?: string | null; litres_reported?: number | null }

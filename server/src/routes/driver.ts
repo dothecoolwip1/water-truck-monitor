@@ -10,6 +10,7 @@ import { config } from '../config.js';
 import { addComment, listComments } from '../lib/comments.js';
 import { getSettings } from '../lib/settings.js';
 import { ensureRecurring } from '../lib/recurring.js';
+import { notifyUsers, officeUsers } from '../lib/notify.js';
 
 const driverOnly = requireRole('driver', 'admin');
 
@@ -39,6 +40,16 @@ const op = z.discriminatedUnion('type', [
     form_data: z.record(z.string(), z.union([z.string().max(500), z.number(), z.boolean(), z.null()])).nullish(),
   }),
   z.object({ type: z.literal('comment'), client_id: clientId, at, job_id: uuid, body: z.string().trim().min(1).max(4000) }),
+  z.object({
+    type: z.literal('inspection'),
+    client_id: clientId,
+    at,
+    truck_id: uuid,
+    odometer_km: z.number().min(0).max(5_000_000).nullish(),
+    engine_hours: z.number().min(0).max(500_000).nullish(),
+    items: z.array(z.object({ label: z.string().min(1).max(80), ok: z.boolean(), note: z.string().max(500).nullish() })).max(40),
+    notes: optionalText,
+  }),
   z.object({
     type: z.literal('fill'),
     client_id: clientId,
@@ -116,13 +127,19 @@ const routes: FastifyPluginAsync = async (app) => {
          order by j.status = 'completed', j.scheduled_date, j.sort_order, j.number`,
         [driverId, config.timezone],
       ),
-      app.pool.query('select id, name, plate, capacity_l, last_meter_reading from trucks where active order by name'),
+      app.pool.query(
+        `select t.id, t.name, t.plate, t.capacity_l, t.last_meter_reading, t.odometer_km, t.engine_hours, t.out_of_service, t.out_of_service_reason,
+                (select max(i.at) from inspections i where i.truck_id = t.id and i.at >= (date_trunc('day', now() at time zone $1) at time zone $1)) as inspected_at
+         from trucks t where t.active order by t.name`,
+        [config.timezone],
+      ),
       app.pool.query('select id, name, lat, lng, geofence_m from source_tanks order by name'),
       getSettings(app.pool),
     ]);
     return {
       shift, jobs: jobs.rows, trucks: trucks.rows, tanks: tanks.rows, server_time: new Date().toISOString(),
       form_fields: settings.form.fields,
+      inspection: settings.inspection,
     };
   });
 
@@ -273,6 +290,34 @@ const routes: FastifyPluginAsync = async (app) => {
       }
       case 'gps': {
         await ingestGps(o.points, userId);
+        return;
+      }
+      case 'inspection': {
+        const defects = o.items.filter((i) => !i.ok);
+        const unsafe = await tx(app.pool, async (c) => {
+          const { rows } = await c.query(
+            `insert into inspections (client_id, truck_id, driver_id, at, odometer_km, engine_hours, items, defects, safe, notes)
+             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) on conflict (client_id) do nothing returning id`,
+            [o.client_id, o.truck_id, userId, o.at, o.odometer_km ?? null, o.engine_hours ?? null, JSON.stringify(o.items), defects.length, defects.length === 0, o.notes ?? null],
+          );
+          if (!rows[0]) return false; // Already received.
+          await c.query(
+            `update trucks set odometer_km = greatest(coalesce(odometer_km, 0), coalesce($2, 0)), engine_hours = greatest(coalesce(engine_hours, 0), coalesce($3, 0)) where id = $1`,
+            [o.truck_id, o.odometer_km ?? null, o.engine_hours ?? null],
+          );
+          if (defects.length) {
+            const reason = defects.map((d) => (d.note ? `${d.label}: ${d.note}` : d.label)).join('; ').slice(0, 500);
+            await c.query('update trucks set out_of_service = true, out_of_service_reason = $2 where id = $1', [o.truck_id, reason]);
+            const truck = (await c.query('select name from trucks where id = $1', [o.truck_id])).rows[0];
+            await notifyUsers(app, c, await officeUsers(c), {
+              kind: 'inspection', title: `${truck?.name ?? 'Truck'} failed its inspection`,
+              body: `${user.name}: ${reason}`, jobId: null,
+            });
+          }
+          await audit(c, 'truck', o.truck_id, 'inspected', userId, { defects: defects.length });
+          return defects.length > 0;
+        });
+        if (unsafe) app.bus.publish({ type: 'shift', driverId: userId, onDuty: false });
         return;
       }
       case 'comment': {

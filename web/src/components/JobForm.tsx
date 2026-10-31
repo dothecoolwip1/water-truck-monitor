@@ -11,20 +11,23 @@ const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 interface Props {
   job?: Job;
   defaultDate?: string;
+  defaultCustomerId?: string;
+  defaultSiteId?: string;
+  defaultLitres?: number;
   onSaved: (job: Job) => void;
   onCancel: () => void;
 }
 
-export default function JobForm({ job, defaultDate, onSaved, onCancel }: Props) {
+export default function JobForm({ job, defaultDate, defaultCustomerId, defaultSiteId, defaultLitres, onSaved, onCancel }: Props) {
   const customers = useApi<Customer[]>('/customers');
   const sites = useApi<Site[]>('/sites');
   const drivers = useApi<User[]>('/users?role=driver');
   const trucks = useApi<Truck[]>('/trucks');
   const invalidate = useInvalidate();
 
-  const [customerId, setCustomerId] = useState<string | null>(job?.customer_id ?? null);
-  const [siteId, setSiteId] = useState<string | null>(job?.site_id ?? null);
-  const [amount, setAmount] = useState<number | string>(job?.requested_litres ?? '');
+  const [customerId, setCustomerId] = useState<string | null>(job?.customer_id ?? defaultCustomerId ?? null);
+  const [siteId, setSiteId] = useState<string | null>(job?.site_id ?? defaultSiteId ?? null);
+  const [amount, setAmount] = useState<number | string>(job?.requested_litres ?? defaultLitres ?? '');
   const [date, setDate] = useState<string | null>(job ? job.scheduled_date : (defaultDate ?? null));
   const [driverId, setDriverId] = useState<string | null>(job?.driver_id ?? null);
   const [truckId, setTruckId] = useState<string | null>(job?.truck_id ?? null);

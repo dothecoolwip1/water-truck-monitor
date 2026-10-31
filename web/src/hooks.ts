@@ -28,21 +28,60 @@ export interface LiveMessage {
   [k: string]: unknown;
 }
 
-/** Subscribes to the server's live event stream; reconnects on its own. Hosts without streaming fall back to polling. */
+/**
+ * Subscribes to live events and reconnects on its own. The server says how:
+ * Ably when it runs on serverless hosting (events cross instances), its own stream on a single server,
+ * or nothing, in which case screens fall back to polling.
+ */
 export function useLive(onEvent: (e: LiveMessage) => void) {
   const handler = useRef(onEvent);
   handler.current = onEvent;
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
-    const token = getToken();
-    if (!token) return;
-    const es = new EventSource(`/api/live/stream?token=${encodeURIComponent(token)}`);
-    const relay = (ev: MessageEvent) => handler.current(JSON.parse(ev.data));
-    for (const t of ['job', 'position', 'shift', 'tank', 'comment', 'notification']) es.addEventListener(t, relay as EventListener);
-    es.onopen = () => setConnected(true);
-    es.onerror = () => setConnected(false);
-    return () => es.close();
+    if (!getToken()) return;
+    let es: EventSource | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+
+    const retry = (ms: number) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => void connect(), ms);
+    };
+
+    async function connect() {
+      es?.close();
+      if (stopped) return;
+      let cfg: { mode: 'ably' | 'sse' | 'poll'; channel?: string; token?: string; expires?: number };
+      try {
+        cfg = await get('/live/config');
+      } catch {
+        setConnected(false);
+        return retry(15_000);
+      }
+      if (stopped || cfg.mode === 'poll') return setConnected(false);
+      const relay = (ev: MessageEvent) => {
+        try { handler.current(JSON.parse(ev.data)); } catch { /* not an event */ }
+      };
+      if (cfg.mode === 'ably') {
+        es = new EventSource(`https://realtime.ably.io/event-stream?v=1.2&enveloped=false&channels=${cfg.channel}&accessToken=${encodeURIComponent(cfg.token!)}`);
+        es.onmessage = relay;
+        // Tokens last an hour; reconnect with a fresh one a minute early.
+        retry(Math.max(60_000, (cfg.expires ?? Date.now() + 3_600_000) - Date.now() - 60_000));
+      } else {
+        es = new EventSource(`/api/live/stream?token=${encodeURIComponent(getToken() ?? '')}`);
+        for (const t of ['job', 'position', 'shift', 'tank', 'comment', 'notification']) es.addEventListener(t, relay as EventListener);
+      }
+      es.onopen = () => setConnected(true);
+      es.onerror = () => {
+        setConnected(false);
+        // Ably drops a stream whose token expired; fetch a new one rather than retrying the old URL.
+        if (cfg.mode === 'ably') { es?.close(); retry(5_000); }
+      };
+    }
+
+    void connect();
+    return () => { stopped = true; clearTimeout(timer); es?.close(); };
   }, []);
 
   return connected;

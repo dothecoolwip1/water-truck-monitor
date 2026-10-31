@@ -10,7 +10,7 @@ import { afterDelivery, generateInvoices } from './lib/billing.js';
 import { getSettings, updateSettings } from './lib/settings.js';
 
 // Bump to replace an older demo data set (only demo data, never real records).
-const DEMO_VERSION = 4;
+const DEMO_VERSION = 7;
 const DEMO_CENTRE = { lat: 66.2565, lng: -128.6335 };
 const DEMO_EMAILS = ['dispatch@example.com', 'sam@example.com', 'lee@example.com', 'jo@example.com'];
 
@@ -91,17 +91,20 @@ export async function seed(pool: pg.Pool, opts: { demo: boolean; adminEmail: str
 
     const sites = await demoSites(c, buildings);
     const today = (await c.query(`select (now() at time zone $1)::date::text as d`, [config.timezone])).rows[0].d;
-    for (let i = 0; i < 18; i++) {
+    const fullness = await demoHistory(c, { drivers, trucks, sites });
+    // Today's run goes to the emptiest tanks. A few low ones are left unbooked so "Running low" has work to show.
+    const order = sites.map((_, i) => i).sort((a, b) => fullness[a] - fullness[b]).filter((_, n) => ![1, 4, 9].includes(n)).slice(0, 14);
+    for (const [n, i] of order.entries()) {
       const s = sites[i];
-      const driver = i < 15 ? drivers[i % 3] : null;
+      const driver = n < 12 ? drivers[n % 3] : null;
       await c.query(
         `insert into jobs (customer_id, site_id, requested_litres, scheduled_date, driver_id, truck_id, status, sort_order)
          values ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [s.cust, s.site, s.litres, today, driver, driver ? trucks[i % 3] : null, driver ? 'scheduled' : 'requested', Math.floor(i / 3)],
+        [s.cust, s.site, Math.round((s.cap * (1 - fullness[i])) / 100) * 100, today, driver, driver ? trucks[n % 3] : null, driver ? 'scheduled' : 'requested', Math.floor(n / 3)],
       );
     }
-    await demoHistory(c, { drivers, trucks, sites });
     await demoBusiness(c, { drivers, trucks, today });
+    await demoOperations(c, { drivers, trucks, today });
     await setMeta(c, 'demo_version', DEMO_VERSION);
     await setMeta(c, 'demo_real', buildings.length >= 30);
     await setMeta(c, 'demo_buildings_tried', Date.now());
@@ -138,7 +141,8 @@ async function isOnlyDemoData(c: pg.PoolClient): Promise<boolean> {
 
 async function clearDemoData(c: pg.PoolClient) {
   await c.query(`truncate deliveries, fills, gps_points, tank_readings, shifts, jobs, files, sites, customers, trucks, source_tanks, audit_log,
-    invoices, recurring_jobs, notifications, job_comments, job_followers, job_reads, job_lines cascade`);
+    invoices, recurring_jobs, notifications, job_comments, job_followers, job_reads, job_lines,
+    inspections, maintenance_log, maintenance_tasks, class_rates, outbound_messages cascade`);
   await c.query('delete from users where email = any($1)', [DEMO_EMAILS]);
 }
 
@@ -234,7 +238,7 @@ async function demoSites(c: pg.PoolClient, buildings: Building[]) {
       `insert into sites (customer_id, label, address, lat, lng, tank_capacity_l) values ($1,$2,$3,$4,$5,$6) returning id`,
       [cust, sp.label, sp.address, sp.lat, sp.lng, sp.house ? 4500 : 20000],
     )).rows[0].id;
-    sites.push({ cust, site, litres: sp.house ? 4000 : 9000 });
+    sites.push({ cust, site, litres: sp.house ? 4000 : 9000, cap: sp.house ? 4500 : 20000 });
   }
   return sites;
 }
@@ -242,7 +246,7 @@ async function demoSites(c: pg.PoolClient, buildings: Building[]) {
 /** Two weeks of past deliveries, truck fills and tank readings, so reports have something to show. */
 async function demoHistory(
   c: pg.PoolClient,
-  d: { drivers: string[]; trucks: string[]; sites: { cust: string; site: string; litres: number }[] },
+  d: { drivers: string[]; trucks: string[]; sites: { cust: string; site: string; litres: number; cap: number }[] },
 ) {
   const tank = (await c.query('select id from source_tanks limit 1')).rows[0].id;
   let rand = 7;
@@ -251,15 +255,25 @@ async function demoHistory(
   let volume = 220_000;
   const readings: [Date, number][] = [];
   const midnight = (await c.query(`select date_trunc('day', now() at time zone $1) at time zone $1 as m`, [config.timezone])).rows[0].m as Date;
+  // Each place uses water at its own steady rate and is refilled when its tank drops below about a third,
+  // so the running-low forecast has realistic history to learn from.
+  const use = d.sites.map((s) => (s.cap > 5000 ? 1200 + rnd() * 1800 : 260 + rnd() * 380));
+  const level = d.sites.map((s) => s.cap * (0.35 + rnd() * 0.6));
   for (let back = 14; back >= 1; back--) {
     const dayStart = new Date(midnight.getTime() - back * 86_400_000);
     const events: { at: Date; drop: number }[] = [];
+    const due: number[] = [];
+    d.sites.forEach((s, i) => {
+      level[i] = Math.max(0, level[i] - use[i]);
+      if (level[i] < s.cap * (0.3 + rnd() * 0.1)) due.push(i);
+    });
     for (let k = 0; k < d.drivers.length; k++) {
       let t = new Date(dayStart.getTime() + (8 + k * 0.25) * 3_600_000);
       let load = 0;
-      for (let n = 0; n < 5 + Math.floor(rnd() * 3); n++) {
-        const s = d.sites[Math.floor(rnd() * d.sites.length)];
-        const want = Math.round(s.litres * (0.6 + rnd() * 0.4));
+      for (const i of due.filter((_, n) => n % d.drivers.length === k)) {
+        const s = d.sites[i];
+        const want = Math.round((s.cap - level[i]) / 50) * 50;
+        level[i] = s.cap;
         if (load < want) {
           // Fill the truck at the bulk tank.
           const fillStart = t;
@@ -305,6 +319,8 @@ async function demoHistory(
     `insert into tank_readings (tank_id, ts, volume_l) select $1, (r->>0)::timestamptz, (r->>1)::numeric from jsonb_array_elements($2::jsonb) r`,
     [tank, JSON.stringify(readings)],
   );
+  // How full each tank will be by the end of today, as a share of its size.
+  return d.sites.map((s, i) => Math.max(0, level[i] - use[i]) / s.cap);
 }
 
 /** Price book, approvals, invoices, chat, a recurring run and a resident request, so every screen has something in it. */
@@ -416,4 +432,79 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       process.exitCode = 1;
     })
     .finally(() => pool.end());
+}
+
+/** Customer classes, alert opt-ins, critical sites, and a fleet with inspections and maintenance history. */
+async function demoOperations(c: pg.PoolClient, d: { drivers: string[]; trucks: string[]; today: string }) {
+  // Classes: facilities are institutional or commercial; a share of houses are public housing.
+  await c.query(`update customers set customer_class = case when name ilike any(array['%store%', '%hotel%', '%co-op%', '%motel%', '%gas%']) then 'commercial' else 'institutional' end
+    where account_code like 'FGH-%' and name not like 'Residence%'`);
+  await c.query(`update customers set customer_class = 'public_housing' where account_code like 'FGH-%' and name like 'Residence%'
+    and right(account_code, 1) in ('2', '5', '8')`);
+  await c.query(`update sites s set critical = true from customers cu where cu.id = s.customer_id and cu.account_code like 'FGH-%' and (cu.name ilike '%health%' or cu.name ilike '%elder%' or cu.name ilike '%nursing%')`);
+  // Email alerts only, to reserved example.com addresses. Demo phones stay opted out so no real number is ever texted.
+  await c.query(`update customers set email = lower(replace(account_code, '-', '')) || '@example.com', notify_email = true
+    where account_code like 'FGH-%' and name like 'Residence%' and right(account_code, 1) in ('1', '4', '7')`);
+  await c.query(
+    `insert into class_rates (customer_class, price_item_id, unit_price) select 'public_housing', id, 0.040 from price_items where code = 'WATER'
+     on conflict do nothing`,
+  );
+  const tank = (await c.query('select lat, lng from source_tanks order by name limit 1')).rows[0];
+  await updateSettings(c, {
+    alerts: { sms: false, email: true, on_scheduled: true, on_en_route: true, on_completed: true },
+    depot: { lat: tank?.lat ?? null, lng: tank?.lng ?? null, label: 'Water plant' },
+  });
+
+  // Trucks, their meters and a maintenance schedule. Truck 2 is overdue for an oil change; Truck 1 needs its tank sanitized soon.
+  const fleet = [
+    { odo: 84_210, hrs: 3_120, oilKm: 79_000, oilHrs: 2_950, sanitized: 26, cvip: 140, pumpHrs: 2_900 },
+    { odo: 120_480, hrs: 4_580, oilKm: 111_900, oilHrs: 4_300, sanitized: 9, cvip: 352, pumpHrs: 4_420 },
+    { odo: 45_230, hrs: 1_610, oilKm: 41_100, oilHrs: 1_480, sanitized: 14, cvip: 60, pumpHrs: 1_300 },
+  ];
+  const ago = (days: number) => `($1::date - ${days})`;
+  const admin = (await c.query(`select id from users where role = 'admin' order by created_at limit 1`)).rows[0]?.id ?? null;
+  for (const [i, truck] of d.trucks.entries()) {
+    const f = fleet[i];
+    await c.query('update trucks set odometer_km = $2, engine_hours = $3 where id = $1', [truck, f.odo, f.hrs]);
+    const tasks: [string, number | null, number | null, number | null, number, number | null, number | null][] = [
+      ['Engine oil and filter', 8000, 250, null, 40, f.oilKm, f.oilHrs],
+      ['Tank sanitizing', null, null, 30, f.sanitized, null, null],
+      ['CVIP safety inspection', null, null, 365, f.cvip, null, null],
+      ['Pump and meter service', null, 500, null, 60, null, f.pumpHrs],
+    ];
+    for (const [name, km, hrs, days, doneAgo, doneKm, doneHrs] of tasks) {
+      const t = (await c.query(
+        `insert into maintenance_tasks (truck_id, name, every_km, every_hours, every_days, last_done_at, last_done_km, last_done_hours)
+         values ($2,$3,$4,$5,$6,${ago(doneAgo)},$7,$8) returning id`,
+        [d.today, truck, name, km, hrs, days, doneKm, doneHrs],
+      )).rows[0].id;
+      await c.query(
+        `insert into maintenance_log (truck_id, task_id, title, done_at, odometer_km, engine_hours, cost, created_by) values ($2,$3,$4,${ago(doneAgo)},$5,$6,$7,$8)`,
+        [d.today, truck, t, name, doneKm, doneHrs, name.startsWith('Engine') ? 285 : name.startsWith('Tank') ? 120 : name.startsWith('CVIP') ? 450 : 210, admin],
+      );
+    }
+  }
+
+  // Two weeks of daily pre-trip inspections. Truck 3 had a light out four days ago, fixed the same day.
+  const items = (await getSettings(c)).inspection.items;
+  const midnight = (await c.query(`select date_trunc('day', now() at time zone $1) at time zone $1 as m`, [config.timezone])).rows[0].m as Date;
+  for (let back = 14; back >= 0; back--) {
+    for (const [i, truck] of d.trucks.entries()) {
+      if (back === 0 && i > 0) continue; // Only Truck 1 has been inspected so far today.
+      const at = new Date(midnight.getTime() - back * 86_400_000 + (7.5 + i * 0.2) * 3_600_000);
+      const defect = i === 2 && back === 4 ? 'Lights and signals' : null;
+      const list = items.map((label) => ({ label, ok: label !== defect, note: label === defect ? 'Rear marker light out' : null }));
+      const f = fleet[i];
+      await c.query(
+        `insert into inspections (client_id, truck_id, driver_id, at, odometer_km, engine_hours, items, defects, safe) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [`demo-${i}-${back}`, truck, d.drivers[i], at, f.odo - back * 38, f.hrs - back * 6, JSON.stringify(list), defect ? 1 : 0, !defect],
+      );
+      if (defect) {
+        await c.query(
+          `insert into maintenance_log (truck_id, title, done_at, odometer_km, cost, notes, created_by) values ($2, 'Replaced rear marker light', ${ago(back)}, $3, 18, 'Found on pre-trip inspection', $4)`,
+          [d.today, truck, f.odo - back * 38, admin],
+        );
+      }
+    }
+  }
 }
