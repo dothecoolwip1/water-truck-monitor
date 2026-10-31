@@ -15,6 +15,7 @@ import ingestRoutes from './routes/ingest.js';
 import reportRoutes from './routes/reports.js';
 import liveRoutes from './routes/live.js';
 import fileRoutes from './routes/files.js';
+import mapRoutes from './routes/map.js';
 
 export interface AppDeps {
   pool: pg.Pool;
@@ -73,6 +74,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   await app.register(reportRoutes, { prefix: '/api' });
   await app.register(liveRoutes, { prefix: '/api' });
   await app.register(fileRoutes, { prefix: '/api' });
+  await app.register(mapRoutes, { prefix: '/api' });
 
   if ((deps.serveWeb ?? true) && fs.existsSync(config.webDist)) {
     // Loaded only when serving the web app: Vercel's function runtime can't load

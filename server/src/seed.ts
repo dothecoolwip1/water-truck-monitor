@@ -5,6 +5,12 @@ import { createPool, tx } from './db.js';
 import { migrate } from './migrate.js';
 import { hashKey } from './routes/admin.js';
 import { config } from './config.js';
+import { bboxAround, downloadBuildings, storeBuildings, type Building } from './lib/osm.js';
+
+// Bump to replace an older demo data set (only demo data, never real records).
+const DEMO_VERSION = 2;
+const DEMO_CENTRE = { lat: 66.2565, lng: -128.6335 };
+const DEMO_EMAILS = ['dispatch@example.com', 'sam@example.com', 'lee@example.com', 'jo@example.com'];
 
 /**
  * Creates the first admin account. With --demo it also adds sample trucks,
@@ -12,7 +18,21 @@ import { config } from './config.js';
  * the whole flow can be tried before real data is loaded.
  */
 export async function seed(pool: pg.Pool, opts: { demo: boolean; adminEmail: string; adminPassword: string }) {
+  // Real building outlines for the demo, fetched before the transaction so a slow
+  // download doesn't hold locks. Without them the demo falls back to a made-up layout.
+  let buildings: Building[] = [];
+  if (opts.demo && !(await demoIsCurrent(pool))) {
+    const box = bboxAround(DEMO_CENTRE.lat, DEMO_CENTRE.lng, 1800);
+    try {
+      buildings = await downloadBuildings(box);
+      await storeBuildings(pool, box, buildings);
+    } catch (err) {
+      console.warn(`Demo: building outlines unavailable (${(err as Error).message}); using a made-up layout`);
+    }
+  }
   return tx(pool, async (c) => {
+    // Several serverless instances can start at once; only one seeds.
+    await c.query('select pg_advisory_xact_lock(7316001)');
     const out: Record<string, unknown> = {};
     const existing = await c.query('select id from users where email = $1', [opts.adminEmail]);
     if (!existing.rows[0]) {
@@ -23,9 +43,17 @@ export async function seed(pool: pg.Pool, opts: { demo: boolean; adminEmail: str
       out.admin = opts.adminEmail;
     }
     if (!opts.demo) return out;
-    if ((await c.query('select 1 from trucks limit 1')).rows[0]) {
-      out.demo = 'skipped, data already present';
+    if (await demoIsCurrent(c)) {
+      out.demo = 'skipped, demo data is current';
       return out;
+    }
+    if ((await c.query('select 1 from trucks limit 1')).rows[0]) {
+      if (!(await isOnlyDemoData(c))) {
+        out.demo = 'skipped, real data present';
+        return out;
+      }
+      await clearDemoData(c);
+      out.demo_replaced = true;
     }
 
     const pw = await bcrypt.hash('driver123', 10);
@@ -43,30 +71,12 @@ export async function seed(pool: pg.Pool, opts: { demo: boolean; adminEmail: str
     const deviceKey = crypto.randomBytes(24).toString('base64url');
     await c.query(
       `insert into source_tanks (name, device_id, device_key_hash, capacity_l, height_mm, lat, lng)
-       values ('Main holding tank', 'armor-001', $1, 250000, 6000, 66.2585, -128.6425)`,
-      [hashKey(deviceKey)],
+       values ('Main holding tank', 'armor-001', $1, 250000, 6000, $2, $3)`,
+      [hashKey(deviceKey), ...tankSpot(buildings)],
     );
     out.tank_device = { device_id: 'armor-001', device_key: deviceKey };
 
-    // Spread delivery points around the community centre.
-    const centre = { lat: 66.2565, lng: -128.6335 };
-    const names = ['Band Office', 'Chief T\'Selehye School', 'Health Centre', 'Northern Store', 'RCMP Detachment', 'Arena',
-      'Elders Centre', 'Church', 'Airport Terminal', 'Water Treatment Plant'];
-    const sites = [];
-    for (let i = 0; i < 30; i++) {
-      const isHouse = i >= names.length;
-      const cust = (await c.query('insert into customers (name, account_code) values ($1,$2) returning id', [
-        isHouse ? `Residence ${100 + i}` : names[i], `FGH-${String(i + 1).padStart(3, '0')}`,
-      ])).rows[0].id;
-      const angle = (i / 30) * Math.PI * 2;
-      const r = 0.002 + (i % 5) * 0.0012;
-      const site = (await c.query(
-        `insert into sites (customer_id, label, address, lat, lng, tank_capacity_l) values ($1,$2,$3,$4,$5,$6) returning id`,
-        [cust, isHouse ? `House ${100 + i}` : names[i], `${100 + i} Main Street, Fort Good Hope, NT`,
-          centre.lat + r * Math.sin(angle), centre.lng + r * 2.2 * Math.cos(angle), isHouse ? 4500 : 20000],
-      )).rows[0].id;
-      sites.push({ cust, site, litres: isHouse ? 4000 : 9000 });
-    }
+    const sites = await demoSites(c, buildings);
     const today = (await c.query(`select (now() at time zone $1)::date::text as d`, [config.timezone])).rows[0].d;
     for (let i = 0; i < 18; i++) {
       const s = sites[i];
@@ -78,10 +88,110 @@ export async function seed(pool: pg.Pool, opts: { demo: boolean; adminEmail: str
       );
     }
     await demoHistory(c, { drivers, trucks, sites });
+    await c.query(
+      `insert into app_meta (key, value) values ('demo_version', $1) on conflict (key) do update set value = excluded.value, updated_at = now()`,
+      [JSON.stringify(DEMO_VERSION)],
+    );
     out.demo = { drivers: ['sam@example.com', 'lee@example.com', 'jo@example.com'], driver_password: 'driver123',
-      dispatcher: 'dispatch@example.com / dispatch123' };
+      dispatcher: 'dispatch@example.com / dispatch123', real_buildings: buildings.length > 0 };
     return out;
   });
+}
+
+async function demoIsCurrent(c: pg.Pool | pg.PoolClient): Promise<boolean> {
+  const r = await c.query(`select value from app_meta where key = 'demo_version'`);
+  return Number(r.rows[0]?.value) === DEMO_VERSION;
+}
+
+/** True when every customer and truck came from a demo seed, so replacing them loses nothing real. */
+async function isOnlyDemoData(c: pg.PoolClient): Promise<boolean> {
+  const r = await c.query(
+    `select (select count(*) from customers where account_code is null or account_code not like 'FGH-%')::int as real_customers,
+            (select count(*) from trucks where plate not in ('NT 4021','NT 4022','NT 4023') or plate is null)::int as real_trucks,
+            (select count(*) from users where role = 'driver' and email <> all($1))::int as real_drivers`,
+    [DEMO_EMAILS],
+  );
+  const x = r.rows[0];
+  return x.real_customers === 0 && x.real_trucks === 0 && x.real_drivers === 0;
+}
+
+async function clearDemoData(c: pg.PoolClient) {
+  await c.query(`truncate deliveries, fills, gps_points, tank_readings, shifts, jobs, files, sites, customers, trucks, source_tanks, audit_log cascade`);
+  await c.query('delete from users where email = any($1)', [DEMO_EMAILS]);
+}
+
+const FACILITIES = ['Band Office', "Chief T'Selehye School", 'Health Centre', 'Northern Store', 'RCMP Detachment', 'Arena',
+  'Elders Centre', 'Church', 'Airport Terminal', 'Water Treatment Plant'];
+
+function areaM2(ring: [number, number][]): number {
+  const k = 111_320 * Math.cos((ring[0][1] * Math.PI) / 180);
+  let a = 0;
+  for (let i = 0; i < ring.length - 1; i++) a += ring[i][0] * k * ring[i + 1][1] * 111_320 - ring[i + 1][0] * k * ring[i][1] * 111_320;
+  return Math.abs(a / 2);
+}
+
+function tankSpot(buildings: Building[]): [number, number] {
+  const plant = buildings.find((b) => /water|treatment|pump/i.test(`${b.name ?? ''} ${b.kind ?? ''}`));
+  return plant ? [plant.lat, plant.lng] : [66.2585, -128.6425];
+}
+
+/**
+ * Demo customers. With real building outlines, public buildings keep their real
+ * OpenStreetMap names and residences sit on actual houses; otherwise points are
+ * spread around the community centre.
+ */
+async function demoSites(c: pg.PoolClient, buildings: Building[]) {
+  type Spot = { name: string; label: string; address: string; lat: number; lng: number; house: boolean };
+  const spots: Spot[] = [];
+  const town = 'Fort Good Hope, NT';
+  if (buildings.length >= 30) {
+    const named = buildings.filter((b) => b.name && !/water|treatment|pump/i.test(b.name)).slice(0, 10);
+    for (const b of named) {
+      spots.push({ name: b.name!, label: b.name!, address: `${b.address ? `${b.address}, ` : ''}${town}`, lat: b.lat, lng: b.lng, house: false });
+    }
+    // Houses: small residential outlines, taken evenly from nearest to farthest so the demo covers the whole community.
+    const homes = buildings
+      .filter((b) => !b.name && (!b.kind || /house|detached|residential|semidetached|cabin|bungalow/.test(b.kind)))
+      .map((b) => ({ b, area: areaM2(b.outline) }))
+      .filter((h) => h.area > 40 && h.area < 400)
+      .sort((x, y) => Math.hypot(x.b.lat - DEMO_CENTRE.lat, (x.b.lng - DEMO_CENTRE.lng) * 0.4) - Math.hypot(y.b.lat - DEMO_CENTRE.lat, (y.b.lng - DEMO_CENTRE.lng) * 0.4));
+    const want = 30 - spots.length;
+    const step = Math.max(1, Math.floor(homes.length / want));
+    for (let i = 0; i < homes.length && spots.length < 30; i += step) {
+      const { b } = homes[i];
+      const n = 100 + spots.length;
+      spots.push({
+        name: `Residence ${n}`, label: `House ${n}`,
+        address: `${b.address ?? 'Fort Good Hope'}, ${town}`.replace(`Fort Good Hope, ${town}`, town),
+        lat: b.lat, lng: b.lng, house: true,
+      });
+    }
+  }
+  if (spots.length < 30) {
+    spots.length = 0;
+    for (let i = 0; i < 30; i++) {
+      const isHouse = i >= FACILITIES.length;
+      const angle = (i / 30) * Math.PI * 2;
+      const r = 0.002 + (i % 5) * 0.0012;
+      spots.push({
+        name: isHouse ? `Residence ${100 + i}` : FACILITIES[i], label: isHouse ? `House ${100 + i}` : FACILITIES[i],
+        address: `${100 + i} Main Street, ${town}`,
+        lat: DEMO_CENTRE.lat + r * Math.sin(angle), lng: DEMO_CENTRE.lng + r * 2.2 * Math.cos(angle), house: isHouse,
+      });
+    }
+  }
+  // Facilities first so today's jobs mix big and small deliveries the same way either way.
+  spots.sort((a, b) => Number(a.house) - Number(b.house));
+  const sites = [];
+  for (const [i, sp] of spots.entries()) {
+    const cust = (await c.query('insert into customers (name, account_code) values ($1,$2) returning id', [sp.name, `FGH-${String(i + 1).padStart(3, '0')}`])).rows[0].id;
+    const site = (await c.query(
+      `insert into sites (customer_id, label, address, lat, lng, tank_capacity_l) values ($1,$2,$3,$4,$5,$6) returning id`,
+      [cust, sp.label, sp.address, sp.lat, sp.lng, sp.house ? 4500 : 20000],
+    )).rows[0].id;
+    sites.push({ cust, site, litres: sp.house ? 4000 : 9000 });
+  }
+  return sites;
 }
 
 /** Two weeks of past deliveries, truck fills and tank readings, so reports have something to show. */
