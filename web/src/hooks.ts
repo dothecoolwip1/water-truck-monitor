@@ -1,36 +1,26 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query';
+import { notifications } from '@mantine/notifications';
 import { get, getToken } from './api';
 
-/** Loads data from the API and reloads on demand or when deps change. */
-export function useLoad<T>(path: string | null, deps: unknown[] = []) {
-  const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const seq = useRef(0);
+/** GET an API path with caching; the path is the cache key. */
+export function useApi<T>(path: string | null, opts: Omit<UseQueryOptions<T>, 'queryKey' | 'queryFn'> = {}) {
+  return useQuery<T>({ queryKey: [path], queryFn: () => get<T>(path!), enabled: !!path, ...opts });
+}
 
-  const reload = useCallback(async () => {
-    if (!path) return;
-    const mine = ++seq.current;
-    setLoading(true);
-    try {
-      const d = await get<T>(path);
-      if (mine === seq.current) {
-        setData(d);
-        setError(null);
-      }
-    } catch (e) {
-      if (mine === seq.current) setError((e as Error).message);
-    } finally {
-      if (mine === seq.current) setLoading(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, ...deps]);
+/** Refetches every cached query whose path starts with one of the prefixes. */
+export function useInvalidate() {
+  const qc = useQueryClient();
+  return (...prefixes: string[]) =>
+    qc.invalidateQueries({ predicate: (q) => typeof q.queryKey[0] === 'string' && prefixes.some((p) => (q.queryKey[0] as string).startsWith(p)) });
+}
 
-  useEffect(() => {
-    void reload();
-  }, [reload]);
+export function notifyError(e: unknown, title = 'Something went wrong') {
+  notifications.show({ color: 'red', title, message: (e as Error).message });
+}
 
-  return { data, error, loading, reload, setData };
+export function notifyOk(message: string) {
+  notifications.show({ color: 'teal', message });
 }
 
 export interface LiveMessage {
@@ -38,7 +28,7 @@ export interface LiveMessage {
   [k: string]: unknown;
 }
 
-/** Subscribes to the server's live event stream; reconnects on its own. */
+/** Subscribes to the server's live event stream; reconnects on its own. Hosts without streaming fall back to polling. */
 export function useLive(onEvent: (e: LiveMessage) => void) {
   const handler = useRef(onEvent);
   handler.current = onEvent;
@@ -56,15 +46,4 @@ export function useLive(onEvent: (e: LiveMessage) => void) {
   }, []);
 
   return connected;
-}
-
-/** Collapses bursts of calls (e.g. many live events) into one call. */
-export function useDebounced(fn: () => void, ms: number) {
-  const t = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const f = useRef(fn);
-  f.current = fn;
-  return useCallback(() => {
-    if (t.current) clearTimeout(t.current);
-    t.current = setTimeout(() => f.current(), ms);
-  }, [ms]);
 }

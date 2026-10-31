@@ -1,10 +1,11 @@
+import { Badge } from '@mantine/core';
 import type { JobStatus } from '../api';
-import { STATUS_COLOR, STATUS_LABEL } from '../format';
+import { STATUS_LABEL, STATUS_MANTINE } from '../format';
 
-export default function StatusBadge({ status }: { status: JobStatus }) {
+export default function StatusBadge({ status, size = 'sm' }: { status: JobStatus; size?: 'xs' | 'sm' | 'md' | 'lg' }) {
   return (
-    <span className="badge" style={{ color: STATUS_COLOR[status], borderColor: STATUS_COLOR[status] }}>
+    <Badge color={STATUS_MANTINE[status]} size={size} variant="light">
       {STATUS_LABEL[status]}
-    </span>
+    </Badge>
   );
 }

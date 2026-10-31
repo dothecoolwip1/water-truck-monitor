@@ -1,5 +1,8 @@
 import { useState, type FormEvent } from 'react';
+import { Alert, Button, Center, Container, Paper, PasswordInput, Stack, Text, TextInput, Title } from '@mantine/core';
+import { IconAlertCircle, IconLock, IconMail } from '@tabler/icons-react';
 import { useAuth } from '../auth';
+import Brand from '../components/Brand';
 
 export default function Login() {
   const { login } = useAuth();
@@ -22,21 +25,29 @@ export default function Login() {
   }
 
   return (
-    <div className="login">
-      <form className="card" onSubmit={submit}>
-        <h1>Water Delivery</h1>
-        <p className="muted">Office sign-in</p>
-        <label>
-          Email
-          <input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
-        </label>
-        <label>
-          Password
-          <input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-        </label>
-        {error && <p className="error">{error}</p>}
-        <button className="primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
-      </form>
-    </div>
+    <Center className="wt-login-bg" p="md">
+      <Container size={420} w="100%">
+        <Stack gap="xl">
+          <Center><Brand size="lg" /></Center>
+          <Paper withBorder shadow="xl" p={{ base: 'lg', sm: 32 }} radius="xl">
+            <form onSubmit={submit}>
+              <Stack>
+                <div>
+                  <Title order={2}>Sign in</Title>
+                  <Text c="dimmed" size="sm">Office and dispatch. Drivers use the phone app.</Text>
+                </div>
+                <TextInput label="Email" type="email" autoComplete="username" inputMode="email" leftSection={<IconMail size={18} />}
+                  value={email} onChange={(e) => setEmail(e.currentTarget.value)} required autoFocus />
+                <PasswordInput label="Password" autoComplete="current-password" leftSection={<IconLock size={18} />}
+                  value={password} onChange={(e) => setPassword(e.currentTarget.value)} required />
+                {error && <Alert color="red" icon={<IconAlertCircle size={18} />}>{error}</Alert>}
+                <Button type="submit" size="md" loading={busy} fullWidth mt="xs">Sign in</Button>
+              </Stack>
+            </form>
+          </Paper>
+          <Text size="xs" c="dimmed" ta="center">Deliveries, meter readings and tank levels in one place.</Text>
+        </Stack>
+      </Container>
+    </Center>
   );
 }

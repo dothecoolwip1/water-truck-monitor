@@ -1,71 +1,99 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Box, Button, Card, Group, Select, Skeleton, Stack, Table, Text, TextInput } from '@mantine/core';
+import { DatePickerInput } from '@mantine/dates';
+import { IconCalendar, IconClipboardList, IconDownload, IconSearch } from '@tabler/icons-react';
 import { authedUrl, type Job, type JobStatus } from '../api';
 import StatusBadge from '../components/StatusBadge';
-import { useLoad } from '../hooks';
+import { EmptyState, PageHeader, useIsMobile } from '../components/ui';
+import { useApi } from '../hooks';
 import { addDays, day, litres, STATUS_LABEL, time, todayIso } from '../format';
 
 export default function Jobs() {
-  const [from, setFrom] = useState(addDays(todayIso(), -7));
-  const [to, setTo] = useState(todayIso());
-  const [status, setStatus] = useState('');
+  const navigate = useNavigate();
+  const mobile = useIsMobile();
+  const [range, setRange] = useState<[string | null, string | null]>([addDays(todayIso(), -7), todayIso()]);
+  const [status, setStatus] = useState<string | null>(null);
   const [q, setQ] = useState('');
-  const query = `/jobs?from=${from}&to=${to}${status ? `&status=${status}` : ''}`;
-  const jobs = useLoad<Job[]>(query, [query]);
+  const [from, to] = [range[0] ?? addDays(todayIso(), -7), range[1] ?? range[0] ?? todayIso()];
+  const jobs = useApi<Job[]>(`/jobs?from=${from}&to=${to}${status ? `&status=${status}` : ''}`);
 
-  const needle = q.trim().toLowerCase();
-  const rows = (jobs.data ?? []).filter(
-    (j) =>
-      !needle ||
-      String(j.number).includes(needle) ||
-      j.customer_name.toLowerCase().includes(needle) ||
-      j.site_label.toLowerCase().includes(needle) ||
-      (j.driver_name ?? '').toLowerCase().includes(needle),
-  );
+  const rows = useMemo(() => {
+    const n = q.trim().toLowerCase();
+    return (jobs.data ?? []).filter(
+      (j) => !n || String(j.number).includes(n) || j.customer_name.toLowerCase().includes(n) || j.site_label.toLowerCase().includes(n) || (j.driver_name ?? '').toLowerCase().includes(n),
+    );
+  }, [jobs.data, q]);
   const total = rows.reduce((s, j) => s + (j.delivered_litres ?? 0), 0);
 
   return (
-    <div className="page">
-      <div className="toolbar">
-        <h2>Jobs</h2>
-        <label className="inline">From <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
-        <label className="inline">To <input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
-        <select value={status} onChange={(e) => setStatus(e.target.value)}>
-          <option value="">Any status</option>
-          {(Object.keys(STATUS_LABEL) as JobStatus[]).map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
-        </select>
-        <input placeholder="Search job, customer, driver" value={q} onChange={(e) => setQ(e.target.value)} />
-        <div className="spacer" />
-        <a className="button" href={authedUrl(`/exports/deliveries.csv?from=${from}&to=${to}`)}>Download deliveries CSV</a>
-      </div>
-      {jobs.error && <p className="error">{jobs.error}</p>}
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Job</th><th>Date</th><th>Customer / delivery point</th><th>Driver</th><th>Truck</th><th>Status</th>
-            <th className="num">Requested</th><th className="num">Delivered</th><th>Done</th>
-          </tr>
-        </thead>
-        <tbody>
+    <Box p={{ base: 'md', lg: 'lg' }}>
+      <PageHeader
+        title="Jobs"
+        subtitle={`${rows.length} jobs · ${litres(total)} delivered`}
+        actions={<Button variant="default" component="a" href={authedUrl(`/exports/deliveries.csv?from=${from}&to=${to}`)} leftSection={<IconDownload size={16} />}>Export CSV</Button>}
+      />
+      <Group gap="sm" mb="md" grow={mobile} wrap="wrap">
+        <DatePickerInput type="range" value={range} onChange={(v) => setRange(v as [string | null, string | null])} leftSection={<IconCalendar size={16} />} valueFormat="MMM D" size="sm" miw={200} allowSingleDateInRange />
+        <Select placeholder="Any status" clearable value={status} onChange={setStatus} size="sm" miw={150}
+          data={(Object.keys(STATUS_LABEL) as JobStatus[]).map((s) => ({ value: s, label: STATUS_LABEL[s] }))} />
+        <TextInput placeholder="Search job, customer, driver" leftSection={<IconSearch size={16} />} value={q} onChange={(e) => setQ(e.currentTarget.value)} size="sm" miw={220} />
+      </Group>
+
+      {jobs.isLoading && <Stack>{[1, 2, 3, 4].map((i) => <Skeleton key={i} h={64} radius="md" />)}</Stack>}
+      {jobs.data && rows.length === 0 && <EmptyState icon={<IconClipboardList size={24} />} title="No jobs match">Try a wider date range or clear the search.</EmptyState>}
+
+      {mobile ? (
+        <Stack gap={8}>
           {rows.map((j) => (
-            <tr key={j.id}>
-              <td><Link to={`/jobs/${j.id}`}>#{j.number}</Link></td>
-              <td>{day(j.scheduled_date)}</td>
-              <td>{j.customer_name}{j.site_label !== j.customer_name && <span className="muted"> · {j.site_label}</span>}</td>
-              <td>{j.driver_name ?? <span className="muted">—</span>}</td>
-              <td>{j.truck_name ?? <span className="muted">—</span>}</td>
-              <td><StatusBadge status={j.status} /></td>
-              <td className="num">{litres(j.requested_litres)}</td>
-              <td className="num">{j.delivered_litres !== null ? <strong>{litres(j.delivered_litres)}</strong> : '—'}</td>
-              <td>{time(j.completed_at)}</td>
-            </tr>
+            <Card key={j.id} padding="sm" radius="md" className="wt-job" onClick={() => navigate(`/jobs/${j.id}`)}>
+              <Group justify="space-between" wrap="nowrap" gap="xs">
+                <Box style={{ minWidth: 0 }}>
+                  <Text fw={700} size="sm" truncate><Text span c="dimmed" size="sm">#{j.number}</Text> {j.customer_name}</Text>
+                  <Text size="xs" c="dimmed" truncate>{day(j.scheduled_date)} · {j.driver_name ?? 'Unassigned'}{j.site_label !== j.customer_name ? ` · ${j.site_label}` : ''}</Text>
+                </Box>
+                <Stack gap={4} align="flex-end">
+                  <StatusBadge status={j.status} size="xs" />
+                  <Text size="sm" fw={700}>{j.delivered_litres !== null ? litres(j.delivered_litres) : <Text span c="dimmed" size="xs">{litres(j.requested_litres)} req.</Text>}</Text>
+                </Stack>
+              </Group>
+            </Card>
           ))}
-        </tbody>
-        <tfoot>
-          <tr><td colSpan={7}>{rows.length} jobs</td><td className="num"><strong>{litres(total)}</strong></td><td /></tr>
-        </tfoot>
-      </table>
-      {jobs.loading && !jobs.data && <p className="muted">Loading…</p>}
-    </div>
+        </Stack>
+      ) : (
+        rows.length > 0 && (
+          <Card p={0}>
+            <Table.ScrollContainer minWidth={860}>
+              <Table highlightOnHover verticalSpacing="sm" horizontalSpacing="md">
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>Job</Table.Th><Table.Th>Date</Table.Th><Table.Th>Customer</Table.Th><Table.Th>Driver</Table.Th><Table.Th>Truck</Table.Th>
+                    <Table.Th>Status</Table.Th><Table.Th ta="right">Requested</Table.Th><Table.Th ta="right">Delivered</Table.Th><Table.Th>Done</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {rows.map((j) => (
+                    <Table.Tr key={j.id} onClick={() => navigate(`/jobs/${j.id}`)} style={{ cursor: 'pointer' }}>
+                      <Table.Td fw={600}>#{j.number}</Table.Td>
+                      <Table.Td>{day(j.scheduled_date)}</Table.Td>
+                      <Table.Td>
+                        <Text size="sm" fw={500}>{j.customer_name}</Text>
+                        {j.site_label !== j.customer_name && <Text size="xs" c="dimmed">{j.site_label}</Text>}
+                      </Table.Td>
+                      <Table.Td>{j.driver_name ?? <Text span c="dimmed">—</Text>}</Table.Td>
+                      <Table.Td>{j.truck_name ?? <Text span c="dimmed">—</Text>}</Table.Td>
+                      <Table.Td><StatusBadge status={j.status} /></Table.Td>
+                      <Table.Td ta="right">{litres(j.requested_litres)}</Table.Td>
+                      <Table.Td ta="right" fw={700}>{j.delivered_litres !== null ? litres(j.delivered_litres) : '—'}</Table.Td>
+                      <Table.Td>{time(j.completed_at)}</Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Table.ScrollContainer>
+          </Card>
+        )
+      )}
+    </Box>
   );
 }

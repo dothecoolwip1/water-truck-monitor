@@ -1,12 +1,20 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import {
+  Alert, Anchor, Badge, Box, Button, Card, Center, Grid, Group, Image, Loader, Menu, NumberInput, SimpleGrid, Stack, Text, TextInput, Textarea, Timeline, Title,
+} from '@mantine/core';
+import { DateTimePicker } from '@mantine/dates';
+import { modals } from '@mantine/modals';
+import {
+  IconArrowLeft, IconBan, IconCalendar, IconCopy, IconDots, IconDroplet, IconFileTypePdf, IconMapPin, IconPencil, IconPhone, IconReceipt, IconTruck, IconUser,
+} from '@tabler/icons-react';
 import { authedUrl, post, type JobDetail } from '../api';
 import JobForm from '../components/JobForm';
 import JobMap from '../components/Map';
-import Modal from '../components/Modal';
 import StatusBadge from '../components/StatusBadge';
-import { useLoad } from '../hooks';
-import { dateTime, day, litres, todayIso } from '../format';
+import { Sheet } from '../components/ui';
+import { notifyError, notifyOk, useApi, useInvalidate } from '../hooks';
+import { dateTime, day, litres, time, todayIso } from '../format';
 
 const ACTION_LABEL: Record<string, string> = {
   created: 'Job created',
@@ -23,158 +31,270 @@ function describe(changes: Record<string, unknown> | null): string {
   if (!changes) return '';
   return Object.entries(changes)
     .filter(([, v]) => v !== null && v !== undefined)
-    .map(([k, v]) => (Array.isArray(v) && v.length === 2 ? `${k}: ${v[0] ?? '—'} → ${v[1] ?? '—'}` : `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`))
-    .join(', ');
+    .map(([k, v]) => (Array.isArray(v) && v.length === 2 ? `${k.replace(/_/g, ' ')}: ${v[0] ?? '—'} → ${v[1] ?? '—'}` : `${k.replace(/_/g, ' ')}: ${typeof v === 'object' ? JSON.stringify(v) : v}`))
+    .join(' · ');
+}
+
+function Field({ icon, label, children }: { icon: React.ReactNode; label: string; children: React.ReactNode }) {
+  return (
+    <Group gap="sm" wrap="nowrap" align="flex-start">
+      <Box c="dimmed" pt={2}>{icon}</Box>
+      <Box style={{ minWidth: 0 }}>
+        <Text size="xs" c="dimmed">{label}</Text>
+        <Text size="sm" fw={500}>{children}</Text>
+      </Box>
+    </Group>
+  );
 }
 
 export default function JobDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const job = useLoad<JobDetail>(`/jobs/${id}`, [id]);
+  const job = useApi<JobDetail>(`/jobs/${id}`);
+  const invalidate = useInvalidate();
   const [editing, setEditing] = useState(false);
   const [entering, setEntering] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
-  if (job.error) return <div className="page"><p className="error">{job.error}</p></div>;
+  if (job.error) return <Box p="md"><Alert color="red">{(job.error as Error).message}</Alert></Box>;
   const j = job.data;
-  if (!j) return <div className="page muted">Loading…</div>;
+  if (!j) return <Center h={300}><Loader /></Center>;
   const open = !['completed', 'cancelled'].includes(j.status);
+  const refresh = () => invalidate('/jobs');
 
-  async function act(path: string, body: unknown, after?: (r: JobDetail) => void) {
-    setError(null);
+  async function clone() {
     try {
-      const r = await post<JobDetail>(path, body);
-      if (after) after(r);
-      else await job.reload();
+      const r = await post<JobDetail>(`/jobs/${j!.id}/clone`, { scheduled_date: todayIso() });
+      notifyOk(`Job #${r.number} created for today`);
+      void refresh();
+      navigate(`/jobs/${r.id}`);
     } catch (e) {
-      setError((e as Error).message);
+      notifyError(e);
     }
   }
 
+  function cancel() {
+    let reason = '';
+    modals.openConfirmModal({
+      title: `Cancel job #${j!.number}?`,
+      children: <TextInput label="Reason" placeholder="Customer cancelled, duplicate…" data-autofocus onChange={(e) => (reason = e.currentTarget.value)} />,
+      labels: { confirm: 'Cancel job', cancel: 'Keep it' },
+      confirmProps: { color: 'red' },
+      onConfirm: async () => {
+        try {
+          await post(`/jobs/${j!.id}/cancel`, { reason });
+          void refresh();
+        } catch (e) {
+          notifyError(e);
+        }
+      },
+    });
+  }
+
+  const meterDiff = j.meter_start !== null && j.meter_end !== null ? j.meter_end - j.meter_start : null;
+
   return (
-    <div className="page detail">
-      <div className="toolbar">
-        <Link to="/">← Dispatch</Link>
-        <h2>Job #{j.number}</h2>
-        <StatusBadge status={j.status} />
-        <div className="spacer" />
-        {j.status === 'completed' && <a className="button" href={authedUrl(`/jobs/${j.id}/ticket.pdf`)} target="_blank" rel="noreferrer">Delivery ticket (PDF)</a>}
-        <button onClick={() => act(`/jobs/${j.id}/clone`, { scheduled_date: todayIso() }, (r) => navigate(`/jobs/${r.id}`))}>Repeat for today</button>
-        {open && <button onClick={() => setEditing(true)}>Edit</button>}
-        {open && <button onClick={() => setEntering(true)}>Enter paper ticket</button>}
-        {open && (
-          <button className="danger" onClick={() => {
-            const reason = prompt('Why is this job being cancelled?');
-            if (reason !== null) void act(`/jobs/${j.id}/cancel`, { reason });
-          }}>Cancel job</button>
-        )}
-      </div>
-      {error && <p className="error banner">{error}</p>}
-      <div className="detail-grid">
-        <div className="card">
-          <h3>{j.site_label}</h3>
-          <p>{j.customer_name !== j.site_label && j.customer_name}{j.customer_phone && <> · <a href={`tel:${j.customer_phone}`}>{j.customer_phone}</a></>}</p>
-          {j.site_address && <p className="muted">{j.site_address}</p>}
-          {j.site_access_notes && <p className="note">Access: {j.site_access_notes}</p>}
-          <dl>
-            <dt>Date</dt><dd>{day(j.scheduled_date)}</dd>
-            <dt>Driver</dt><dd>{j.driver_name ?? '—'}</dd>
-            <dt>Truck</dt><dd>{j.truck_name ?? '—'}</dd>
-            <dt>Requested</dt><dd>{litres(j.requested_litres)}</dd>
-            {j.notes && <><dt>Notes</dt><dd>{j.notes}</dd></>}
-            <dt>Started</dt><dd>{dateTime(j.started_at)}</dd>
-            <dt>Arrived</dt><dd>{dateTime(j.arrived_at)}{j.arrival_source && <span className="muted"> ({j.arrival_source === 'manual' ? 'driver tapped arrived' : 'GPS geofence'})</span>}</dd>
-            <dt>Completed</dt><dd>{dateTime(j.completed_at)}</dd>
-          </dl>
-        </div>
-        <div className="card">
-          <h3>Delivery</h3>
-          {j.status === 'completed' ? (
-            <>
-              <p className="big">{litres(j.delivered_litres)}</p>
-              <dl>
-                <dt>Meter start</dt><dd>{j.meter_start ?? '—'}</dd>
-                <dt>Meter end</dt><dd>{j.meter_end ?? '—'}</dd>
-                {j.meter_start !== null && j.meter_end !== null && (
-                  <><dt>Meter difference</dt><dd>{litres(j.meter_end - j.meter_start)}{Math.abs(j.meter_end - j.meter_start - (j.delivered_litres ?? 0)) > 1 && <span className="error"> (doesn't match litres entered)</span>}</dd></>
-                )}
-                <dt>Received by</dt><dd>{j.recipient_name ?? '—'}</dd>
-                {j.delivery_notes && <><dt>Driver notes</dt><dd>{j.delivery_notes}</dd></>}
-              </dl>
-              <div className="photos">
-                {j.meter_photo_id && <a href={authedUrl(`/files/${j.meter_photo_id}`)} target="_blank" rel="noreferrer"><img src={authedUrl(`/files/${j.meter_photo_id}`)} alt="Meter reading" /></a>}
-                {j.signature_id && <img className="sig" src={authedUrl(`/files/${j.signature_id}`)} alt="Signature" />}
-              </div>
-            </>
-          ) : (
-            <p className="muted">Not delivered yet.</p>
+    <Box p={{ base: 'md', lg: 'lg' }} maw={1280}>
+      <Anchor component={Link} to="/" size="sm" c="dimmed">
+        <Group gap={4}><IconArrowLeft size={16} />Dispatch</Group>
+      </Anchor>
+      <Group justify="space-between" align="flex-start" mt="xs" mb="md" wrap="nowrap">
+        <Box style={{ minWidth: 0 }}>
+          <Group gap="sm">
+            <Title order={2} fz={{ base: 22, sm: 26 }}>Job #{j.number}</Title>
+            <StatusBadge status={j.status} size="lg" />
+            {j.priority === 2 && <Badge color="red" variant="filled">Out of water</Badge>}
+          </Group>
+          <Text c="dimmed" size="sm" truncate>{j.site_label}{j.site_address ? ` · ${j.site_address}` : ''}</Text>
+        </Box>
+        <Group gap="xs" wrap="nowrap">
+          {j.status === 'completed' && (
+            <Button component="a" href={authedUrl(`/jobs/${j.id}/ticket.pdf`)} target="_blank" rel="noreferrer" leftSection={<IconFileTypePdf size={18} />} visibleFrom="sm">
+              Delivery ticket
+            </Button>
           )}
-        </div>
-        <div className="card mapcard">
-          <JobMap jobs={[j]} trail={j.trail.map((p) => [p.lat, p.lng])} height={320} />
-          <p className="muted small">{j.trail.length ? `${j.trail.length} GPS points recorded during the job` : 'No GPS trail recorded for this job.'}</p>
-        </div>
-        <div className="card">
-          <h3>History</h3>
-          {j.audit.length === 0 && <p className="muted small">No history recorded.</p>}
-          <ol className="audit">
-            {j.audit.map((a, i) => (
-              <li key={i}>
-                <span className="muted small">{dateTime(a.at)}</span> <strong>{ACTION_LABEL[a.action] ?? a.action}</strong>
-                {a.actor_name && <span className="muted"> by {a.actor_name}</span>}
-                {['updated', 'assigned', 'cancelled', 'completed'].includes(a.action) && <div className="small muted">{describe(a.changes)}</div>}
-              </li>
-            ))}
-          </ol>
-        </div>
-      </div>
-      {editing && (
-        <Modal title={`Edit job #${j.number}`} onClose={() => setEditing(false)}>
-          <JobForm job={j} onCancel={() => setEditing(false)} onSaved={() => { setEditing(false); void job.reload(); }} />
-        </Modal>
-      )}
-      {entering && <PaperTicket jobId={j.id} onClose={() => setEntering(false)} onDone={() => { setEntering(false); void job.reload(); }} />}
-    </div>
+          {open && <Button variant="default" leftSection={<IconPencil size={16} />} onClick={() => setEditing(true)} visibleFrom="sm">Edit</Button>}
+          <Menu position="bottom-end" shadow="md" width={230}>
+            <Menu.Target>
+              <Button variant="default" px="xs" aria-label="More actions"><IconDots size={18} /></Button>
+            </Menu.Target>
+            <Menu.Dropdown>
+              {j.status === 'completed' && (
+                <Menu.Item component="a" href={authedUrl(`/jobs/${j.id}/ticket.pdf`)} target="_blank" leftSection={<IconFileTypePdf size={16} />} hiddenFrom="sm">Delivery ticket (PDF)</Menu.Item>
+              )}
+              {open && <Menu.Item leftSection={<IconPencil size={16} />} onClick={() => setEditing(true)} hiddenFrom="sm">Edit job</Menu.Item>}
+              <Menu.Item leftSection={<IconCopy size={16} />} onClick={() => void clone()}>Repeat for today</Menu.Item>
+              {open && <Menu.Item leftSection={<IconReceipt size={16} />} onClick={() => setEntering(true)}>Enter paper ticket</Menu.Item>}
+              {open && (
+                <>
+                  <Menu.Divider />
+                  <Menu.Item color="red" leftSection={<IconBan size={16} />} onClick={cancel}>Cancel job</Menu.Item>
+                </>
+              )}
+            </Menu.Dropdown>
+          </Menu>
+        </Group>
+      </Group>
+
+      <Grid gap="md">
+        <Grid.Col span={{ base: 12, md: 7 }}>
+          <Stack gap="md">
+            <Card p={0} style={{ overflow: 'hidden' }}>
+              <JobMap jobs={[j]} trail={j.trail.map((p) => [p.lat, p.lng])} height={340} radius={0} />
+              <Group justify="space-between" p="sm">
+                <Text size="xs" c="dimmed">{j.trail.length ? `Route: ${j.trail.length} GPS points` : 'No GPS route recorded for this job'}</Text>
+                {j.site_lat !== null && (
+                  <Anchor size="xs" href={`https://www.google.com/maps/dir/?api=1&destination=${j.site_lat},${j.site_lng}`} target="_blank">Directions</Anchor>
+                )}
+              </Group>
+            </Card>
+            <Card>
+              <Title order={4} mb="md">Delivery</Title>
+              {j.status === 'completed' ? (
+                <Stack gap="md">
+                  <Group align="baseline" gap="xs">
+                    <Text fz={36} fw={800} lh={1} c="teal">{litres(j.delivered_litres)}</Text>
+                    <Text c="dimmed" size="sm">delivered {dateTime(j.delivered_at ?? j.completed_at)}</Text>
+                  </Group>
+                  <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="sm">
+                    <Field icon={<IconDroplet size={16} />} label="Meter start">{j.meter_start ?? '—'}</Field>
+                    <Field icon={<IconDroplet size={16} />} label="Meter end">{j.meter_end ?? '—'}</Field>
+                    <Field icon={<IconDroplet size={16} />} label="Meter difference">{meterDiff === null ? '—' : litres(meterDiff)}</Field>
+                    <Field icon={<IconUser size={16} />} label="Received by">{j.recipient_name ?? '—'}</Field>
+                  </SimpleGrid>
+                  {meterDiff !== null && Math.abs(meterDiff - (j.delivered_litres ?? 0)) > 1 && (
+                    <Alert color="orange" p="xs">The meter difference doesn't match the litres entered.</Alert>
+                  )}
+                  {j.delivery_notes && <Text size="sm"><Text span c="dimmed">Driver notes: </Text>{j.delivery_notes}</Text>}
+                  {(j.meter_photo_id || j.signature_id) && (
+                    <SimpleGrid cols={{ base: 1, xs: 2 }} spacing="sm">
+                      {j.meter_photo_id && (
+                        <a href={authedUrl(`/files/${j.meter_photo_id}`)} target="_blank" rel="noreferrer">
+                          <Image src={authedUrl(`/files/${j.meter_photo_id}`)} alt="Meter reading" className="wt-photo" />
+                        </a>
+                      )}
+                      {j.signature_id && <Image src={authedUrl(`/files/${j.signature_id}`)} alt="Signature" className="wt-sig" fit="contain" />}
+                    </SimpleGrid>
+                  )}
+                </Stack>
+              ) : (
+                <Text c="dimmed" size="sm">{j.status === 'cancelled' ? 'Cancelled before delivery.' : 'Not delivered yet. The driver records litres, the meter photo and a signature on their phone.'}</Text>
+              )}
+            </Card>
+          </Stack>
+        </Grid.Col>
+        <Grid.Col span={{ base: 12, md: 5 }}>
+          <Stack gap="md">
+            <Card>
+              <Title order={4} mb="md">Details</Title>
+              <Stack gap="sm">
+                <Field icon={<IconUser size={16} />} label="Customer">
+                  {j.customer_name}
+                  {j.customer_phone && <> · <Anchor href={`tel:${j.customer_phone}`} size="sm"><IconPhone size={13} /> {j.customer_phone}</Anchor></>}
+                </Field>
+                <Field icon={<IconMapPin size={16} />} label="Delivery point">{j.site_label}{j.site_address ? `, ${j.site_address}` : ''}</Field>
+                {j.site_access_notes && <Alert color="yellow" p="xs" variant="light"><Text size="sm">Access: {j.site_access_notes}</Text></Alert>}
+                <SimpleGrid cols={2} spacing="sm">
+                  <Field icon={<IconCalendar size={16} />} label="Date">{day(j.scheduled_date)}</Field>
+                  <Field icon={<IconDroplet size={16} />} label="Requested">{j.requested_litres ? litres(j.requested_litres) : 'Fill to full'}</Field>
+                  <Field icon={<IconUser size={16} />} label="Driver">{j.driver_name ?? '—'}</Field>
+                  <Field icon={<IconTruck size={16} />} label="Truck">{j.truck_name ?? '—'}</Field>
+                </SimpleGrid>
+                {j.notes && <Text size="sm"><Text span c="dimmed">Notes: </Text>{j.notes}</Text>}
+              </Stack>
+            </Card>
+            <Card>
+              <Title order={4} mb="md">Progress</Title>
+              <Timeline bulletSize={18} lineWidth={2} active={[j.created_at, j.started_at, j.arrived_at, j.completed_at].filter(Boolean).length - 1} color="water">
+                <Timeline.Item title="Created"><Text size="xs" c="dimmed">{dateTime(j.created_at)}</Text></Timeline.Item>
+                <Timeline.Item title="Driver on the way"><Text size="xs" c="dimmed">{j.started_at ? time(j.started_at) : 'Not yet'}</Text></Timeline.Item>
+                <Timeline.Item title="Arrived">
+                  <Text size="xs" c="dimmed">{j.arrived_at ? `${time(j.arrived_at)} · ${j.arrival_source === 'manual' ? 'driver tapped arrived' : 'GPS geofence'}` : 'Not yet'}</Text>
+                </Timeline.Item>
+                <Timeline.Item title={j.status === 'cancelled' ? 'Cancelled' : 'Delivered'} color={j.status === 'cancelled' ? 'gray' : 'teal'}>
+                  <Text size="xs" c="dimmed">{j.completed_at ? time(j.completed_at) : j.cancelled_at ? dateTime(j.cancelled_at) : 'Not yet'}</Text>
+                </Timeline.Item>
+              </Timeline>
+            </Card>
+            <Card>
+              <Title order={4} mb="md">History</Title>
+              {j.audit.length === 0 && <Text size="sm" c="dimmed">No history recorded.</Text>}
+              <Stack gap="xs">
+                {j.audit.map((a, i) => (
+                  <Box key={i}>
+                    <Group justify="space-between" gap="xs" wrap="nowrap">
+                      <Text size="sm" fw={600}>{ACTION_LABEL[a.action] ?? a.action}</Text>
+                      <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>{dateTime(a.at)}</Text>
+                    </Group>
+                    <Text size="xs" c="dimmed">
+                      {a.actor_name ? `by ${a.actor_name}` : ''}
+                      {['updated', 'assigned', 'cancelled', 'completed'].includes(a.action) && describe(a.changes) ? ` · ${describe(a.changes)}` : ''}
+                    </Text>
+                  </Box>
+                ))}
+              </Stack>
+            </Card>
+          </Stack>
+        </Grid.Col>
+      </Grid>
+
+      <Sheet opened={editing} onClose={() => setEditing(false)} title={`Edit job #${j.number}`}>
+        <JobForm job={j} onCancel={() => setEditing(false)} onSaved={() => setEditing(false)} />
+      </Sheet>
+      <Sheet opened={entering} onClose={() => setEntering(false)} title="Enter a paper delivery ticket" size="md">
+        <PaperTicket jobId={j.id} onDone={() => { setEntering(false); void refresh(); }} onCancel={() => setEntering(false)} />
+      </Sheet>
+    </Box>
   );
 }
 
-function PaperTicket({ jobId, onClose, onDone }: { jobId: string; onClose: () => void; onDone: () => void }) {
-  const [form, setForm] = useState({ litres: '', meter_start: '', meter_end: '', recipient_name: '', notes: '', delivered_at: '' });
+function PaperTicket({ jobId, onDone, onCancel }: { jobId: string; onDone: () => void; onCancel: () => void }) {
+  const [amount, setAmount] = useState<number | string>('');
+  const [start, setStart] = useState<number | string>('');
+  const [end, setEnd] = useState<number | string>('');
+  const [recipient, setRecipient] = useState('');
+  const [notes, setNotes] = useState('');
+  const [at, setAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm({ ...form, [k]: e.target.value });
-  const num = (v: string) => (v === '' ? null : Number(v));
+  const [busy, setBusy] = useState(false);
+  const num = (v: number | string) => (v === '' ? null : Number(v));
 
   async function submit(e: FormEvent) {
     e.preventDefault();
+    setBusy(true);
     try {
       await post(`/jobs/${jobId}/complete`, {
-        litres: Number(form.litres),
-        meter_start: num(form.meter_start),
-        meter_end: num(form.meter_end),
-        recipient_name: form.recipient_name || null,
-        notes: form.notes || null,
-        delivered_at: form.delivered_at ? new Date(form.delivered_at).toISOString() : undefined,
+        litres: Number(amount),
+        meter_start: num(start),
+        meter_end: num(end),
+        recipient_name: recipient || null,
+        notes: notes || null,
+        delivered_at: at ? new Date(at).toISOString() : undefined,
       });
       onDone();
     } catch (err) {
       setError((err as Error).message);
+    } finally {
+      setBusy(false);
     }
   }
 
   return (
-    <Modal title="Enter a paper delivery ticket" onClose={onClose}>
-      <form className="form" onSubmit={submit}>
-        <div className="grid2">
-          <label>Litres delivered<input type="number" min={0} step="0.1" required value={form.litres} onChange={set('litres')} autoFocus /></label>
-          <label>Delivered at<input type="datetime-local" value={form.delivered_at} onChange={set('delivered_at')} /></label>
-          <label>Meter start<input type="number" min={0} step="0.1" value={form.meter_start} onChange={set('meter_start')} /></label>
-          <label>Meter end<input type="number" min={0} step="0.1" value={form.meter_end} onChange={set('meter_end')} /></label>
-        </div>
-        <label>Received by<input value={form.recipient_name} onChange={set('recipient_name')} /></label>
-        <label>Notes<textarea rows={2} value={form.notes} onChange={set('notes')} /></label>
-        {error && <p className="error">{error}</p>}
-        <div className="actions"><button type="button" onClick={onClose}>Cancel</button><button className="primary">Record delivery</button></div>
-      </form>
-    </Modal>
+    <form onSubmit={submit}>
+      <Stack>
+        <SimpleGrid cols={{ base: 1, xs: 2 }}>
+          <NumberInput label="Litres delivered" required min={0} thousandSeparator="," value={amount} onChange={setAmount} data-autofocus />
+          <DateTimePicker label="Delivered at" placeholder="Now" value={at} onChange={(v) => setAt(v as string | null)} clearable size="md" />
+          <NumberInput label="Meter start" min={0} value={start} onChange={(v) => { setStart(v); if (end !== '' && v !== '') setAmount(Number(end) - Number(v)); }} />
+          <NumberInput label="Meter end" min={0} value={end} onChange={(v) => { setEnd(v); if (start !== '' && v !== '') setAmount(Number(v) - Number(start)); }} />
+        </SimpleGrid>
+        <TextInput label="Received by" value={recipient} onChange={(e) => setRecipient(e.currentTarget.value)} />
+        <Textarea label="Notes" autosize minRows={2} value={notes} onChange={(e) => setNotes(e.currentTarget.value)} />
+        {error && <Alert color="red">{error}</Alert>}
+        <Group justify="flex-end">
+          <Button variant="default" onClick={onCancel}>Cancel</Button>
+          <Button type="submit" loading={busy}>Record delivery</Button>
+        </Group>
+      </Stack>
+    </form>
   );
 }

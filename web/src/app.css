@@ -1,0 +1,80 @@
+html, body, #root { height: 100%; }
+body { -webkit-tap-highlight-color: transparent; overscroll-behavior-y: none; }
+
+/* Zoomed-out job markers. */
+.wt-dot { --pin: #339af0; width: 16px; height: 16px; border-radius: 50%; background: var(--pin); border: 2.5px solid #fff; box-shadow: 0 1px 4px rgb(0 0 0 / 0.5); cursor: pointer; }
+.wt-dot.urgent { animation: wt-pulse 1.6s ease-out infinite; }
+
+/* Map pins: a teardrop in the job's status colour with its number. */
+.wt-pin {
+  --pin: #339af0;
+  width: 28px; height: 28px; margin-bottom: 2px;
+  border-radius: 50% 50% 50% 2px; transform: rotate(-45deg);
+  background: var(--pin); border: 2.5px solid #fff;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.45);
+  display: grid; place-items: center; cursor: pointer;
+  transition: transform 120ms ease, width 120ms ease, height 120ms ease;
+}
+.wt-pin span { transform: rotate(45deg); color: #fff; font: 700 11px/1 var(--mantine-font-family); text-shadow: 0 1px 1px rgb(0 0 0 / 0.35); }
+.wt-pin.active { width: 38px; height: 38px; }
+.wt-pin.active span { font-size: 13px; }
+.wt-pin.urgent { animation: wt-pulse 1.6s ease-out infinite; }
+@keyframes wt-pulse { 0% { box-shadow: 0 0 0 0 rgb(250 82 82 / 0.7), 0 2px 6px rgb(0 0 0 / 0.45); } 100% { box-shadow: 0 0 0 14px rgb(250 82 82 / 0), 0 2px 6px rgb(0 0 0 / 0.45); } }
+
+.wt-truck {
+  display: flex; align-items: center; gap: 4px; padding: 3px 8px 3px 6px;
+  border-radius: 999px; background: #111; color: #fff; border: 2px solid #fff;
+  font: 600 12px/1 var(--mantine-font-family); box-shadow: 0 2px 8px rgb(0 0 0 / 0.5); white-space: nowrap;
+}
+
+.wt-map-control { box-shadow: var(--mantine-shadow-sm); }
+.wt-map-hint { background: rgb(0 0 0 / 0.6); color: #fff; padding: 3px 8px; border-radius: 999px; z-index: 2; }
+.maplibregl-popup-content { border-radius: 12px; padding: 8px 10px; background: var(--mantine-color-body); color: var(--mantine-color-text); box-shadow: var(--mantine-shadow-md); }
+.maplibregl-popup-tip { display: none; }
+.maplibregl-ctrl-group { border-radius: 12px !important; overflow: hidden; }
+
+/* Mobile bottom tab bar, clear of the iPhone home indicator. */
+.wt-tabbar {
+  position: fixed; inset: auto 0 0 0; z-index: 200;
+  display: grid; grid-template-columns: repeat(5, 1fr);
+  padding-bottom: env(safe-area-inset-bottom);
+  background: color-mix(in srgb, var(--mantine-color-body) 88%, transparent);
+  backdrop-filter: saturate(1.6) blur(14px);
+  border-top: 1px solid var(--mantine-color-default-border);
+}
+.wt-tab {
+  display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 0 6px;
+  color: var(--mantine-color-dimmed); text-decoration: none; font-size: 11px; font-weight: 600;
+}
+.wt-tab[data-active] { color: var(--mantine-primary-color-filled); }
+.wt-page { padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
+@media (min-width: 48em) { .wt-page { padding-bottom: var(--mantine-spacing-xl); } }
+
+.wt-navlink { border-radius: var(--mantine-radius-md); font-weight: 600; }
+
+/* Job cards on the dispatch board. */
+.wt-job { cursor: pointer; transition: box-shadow 120ms ease, transform 120ms ease, border-color 120ms ease; touch-action: manipulation; }
+.wt-job:hover { box-shadow: var(--mantine-shadow-sm); border-color: var(--mantine-color-water-3); }
+.wt-job[data-urgent] { border-left: 4px solid var(--mantine-color-red-6); }
+.wt-job[data-dragging] { opacity: 0.4; }
+.wt-job[data-overlay] { box-shadow: var(--mantine-shadow-xl); transform: rotate(1.5deg) scale(1.02); cursor: grabbing; }
+.wt-column { min-width: 280px; width: 280px; flex: 0 0 auto; }
+.wt-column[data-over] { outline: 2px dashed var(--mantine-color-water-5); outline-offset: 2px; }
+.wt-drag { cursor: grab; touch-action: none; color: var(--mantine-color-dimmed); }
+
+.wt-photo { border-radius: var(--mantine-radius-md); max-height: 260px; object-fit: cover; }
+.wt-sig { background: #fff; border-radius: var(--mantine-radius-md); max-height: 120px; }
+.wt-login-bg {
+  min-height: 100%;
+  background:
+    radial-gradient(1200px 600px at 10% -10%, var(--mantine-color-water-2), transparent 60%),
+    radial-gradient(900px 500px at 110% 110%, var(--mantine-color-cyan-1), transparent 60%),
+    var(--mantine-color-body);
+}
+[data-mantine-color-scheme='dark'] .wt-login-bg {
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgb(11 92 173 / 0.35), transparent 60%),
+    radial-gradient(900px 500px at 110% 110%, rgb(21 170 191 / 0.18), transparent 60%),
+    var(--mantine-color-body);
+}
+.wt-scroll-x { overflow-x: auto; scrollbar-width: thin; -webkit-overflow-scrolling: touch; }

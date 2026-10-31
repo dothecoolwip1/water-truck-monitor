@@ -1,6 +1,10 @@
-import { useMemo, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
+import { Alert, Button, Group, NumberInput, SegmentedControl, Select, SimpleGrid, Stack, Text, Textarea } from '@mantine/core';
+import { DatePickerInput } from '@mantine/dates';
+import { IconCalendar, IconDroplet, IconInfoCircle, IconMapPin, IconTruck, IconUser } from '@tabler/icons-react';
 import { patch, post, type Customer, type Job, type Site, type Truck, type User } from '../api';
-import { useLoad } from '../hooks';
+import { useApi, useInvalidate } from '../hooks';
+import { litres as fmtLitres } from '../format';
 
 interface Props {
   job?: Job;
@@ -10,36 +14,30 @@ interface Props {
 }
 
 export default function JobForm({ job, defaultDate, onSaved, onCancel }: Props) {
-  const customers = useLoad<Customer[]>('/customers');
-  const sites = useLoad<Site[]>('/sites');
-  const drivers = useLoad<User[]>('/users?role=driver');
-  const trucks = useLoad<Truck[]>('/trucks');
+  const customers = useApi<Customer[]>('/customers');
+  const sites = useApi<Site[]>('/sites');
+  const drivers = useApi<User[]>('/users?role=driver');
+  const trucks = useApi<Truck[]>('/trucks');
+  const invalidate = useInvalidate();
 
-  const [customerId, setCustomerId] = useState(job?.customer_id ?? '');
-  const [siteId, setSiteId] = useState(job?.site_id ?? '');
-  const [search, setSearch] = useState('');
-  const [litres, setLitres] = useState(job?.requested_litres?.toString() ?? '');
-  const [date, setDate] = useState(job ? (job.scheduled_date ?? '') : (defaultDate ?? ''));
-  const [driverId, setDriverId] = useState(job?.driver_id ?? '');
-  const [truckId, setTruckId] = useState(job?.truck_id ?? '');
-  const [priority, setPriority] = useState(job?.priority ?? 0);
+  const [customerId, setCustomerId] = useState<string | null>(job?.customer_id ?? null);
+  const [siteId, setSiteId] = useState<string | null>(job?.site_id ?? null);
+  const [amount, setAmount] = useState<number | string>(job?.requested_litres ?? '');
+  const [date, setDate] = useState<string | null>(job ? job.scheduled_date : (defaultDate ?? null));
+  const [driverId, setDriverId] = useState<string | null>(job?.driver_id ?? null);
+  const [truckId, setTruckId] = useState<string | null>(job?.truck_id ?? null);
+  const [priority, setPriority] = useState(String(job?.priority ?? 0));
   const [notes, setNotes] = useState(job?.notes ?? '');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const matches = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const list = customers.data ?? [];
-    if (!q) return list.slice(0, 50);
-    return list.filter((c) => c.name.toLowerCase().includes(q) || (c.account_code ?? '').toLowerCase().includes(q)).slice(0, 50);
-  }, [customers.data, search]);
   const customerSites = (sites.data ?? []).filter((s) => s.customer_id === customerId);
-  const selectedCustomer = customers.data?.find((c) => c.id === customerId);
+  const site = customerSites.find((s) => s.id === siteId);
 
-  function pickCustomer(id: string) {
+  function pickCustomer(id: string | null) {
     setCustomerId(id);
     const own = (sites.data ?? []).filter((s) => s.customer_id === id);
-    setSiteId(own.length === 1 ? own[0].id : '');
+    setSiteId(own.length === 1 ? own[0].id : null);
   }
 
   async function submit(e: FormEvent) {
@@ -50,15 +48,17 @@ export default function JobForm({ job, defaultDate, onSaved, onCancel }: Props) 
     const body = {
       customer_id: customerId,
       site_id: siteId,
-      requested_litres: litres ? Number(litres) : null,
+      requested_litres: amount === '' ? null : Number(amount),
       scheduled_date: date || null,
       driver_id: driverId || null,
       truck_id: truckId || null,
-      priority,
+      priority: Number(priority),
       notes: notes || null,
     };
     try {
-      onSaved(job ? await patch<Job>(`/jobs/${job.id}`, body) : await post<Job>('/jobs', body));
+      const saved = job ? await patch<Job>(`/jobs/${job.id}`, body) : await post<Job>('/jobs', body);
+      void invalidate('/jobs');
+      onSaved(saved);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -67,83 +67,62 @@ export default function JobForm({ job, defaultDate, onSaved, onCancel }: Props) 
   }
 
   return (
-    <form onSubmit={submit} className="form">
-      <label>
-        Customer
-        {selectedCustomer && !search ? (
-          <div className="row">
-            <strong>{selectedCustomer.name}</strong>
-            {selectedCustomer.account_code && <span className="muted">{selectedCustomer.account_code}</span>}
-            <button type="button" className="link" onClick={() => { setCustomerId(''); setSiteId(''); }}>Change</button>
-          </div>
-        ) : (
-          <>
-            <input placeholder="Search by name or account" value={search} onChange={(e) => setSearch(e.target.value)} autoFocus />
-            <div className="picklist">
-              {matches.map((c) => (
-                <button type="button" key={c.id} onClick={() => { pickCustomer(c.id); setSearch(''); }}>
-                  {c.name} {c.account_code && <span className="muted">{c.account_code}</span>}
-                </button>
-              ))}
-              {customers.data && matches.length === 0 && <span className="muted">No match. Add customers on the Customers page.</span>}
-            </div>
-          </>
+    <form onSubmit={submit}>
+      <Stack gap="md">
+        <Select
+          label="Customer"
+          placeholder="Search by name or account"
+          searchable
+          nothingFoundMessage="No match. Add customers on the Customers page."
+          data={(customers.data ?? []).map((c) => ({ value: c.id, label: c.account_code ? `${c.name} · ${c.account_code}` : c.name }))}
+          value={customerId}
+          onChange={pickCustomer}
+          leftSection={<IconUser size={18} />}
+          limit={60}
+          data-autofocus
+          required
+        />
+        {customerId && (
+          <Select
+            label="Delivery point"
+            placeholder="Choose…"
+            data={customerSites.map((s) => ({ value: s.id, label: s.address ? `${s.label} · ${s.address}` : s.label }))}
+            value={siteId}
+            onChange={setSiteId}
+            leftSection={<IconMapPin size={18} />}
+            error={customerSites.length === 0 ? 'This customer has no delivery points yet.' : undefined}
+            required
+          />
         )}
-      </label>
-      {customerId && (
-        <label>
-          Delivery point
-          <select value={siteId} onChange={(e) => setSiteId(e.target.value)} required>
-            <option value="">Choose…</option>
-            {customerSites.map((s) => (
-              <option key={s.id} value={s.id}>{s.label}{s.address ? `, ${s.address}` : ''}</option>
-            ))}
-          </select>
-          {customerSites.length === 0 && <span className="error">This customer has no delivery points yet.</span>}
-        </label>
-      )}
-      <div className="grid2">
-        <label>
-          Litres requested
-          <input type="number" min={1} step={1} value={litres} onChange={(e) => setLitres(e.target.value)} placeholder="Fill to full" />
-        </label>
-        <label>
-          Date
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-        </label>
-        <label>
-          Driver
-          <select value={driverId} onChange={(e) => setDriverId(e.target.value)}>
-            <option value="">Not assigned</option>
-            {(drivers.data ?? []).filter((d) => d.active).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-          </select>
-        </label>
-        <label>
-          Truck
-          <select value={truckId} onChange={(e) => setTruckId(e.target.value)}>
-            <option value="">Driver picks when going on duty</option>
-            {(trucks.data ?? []).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
-        </label>
-      </div>
-      <label>
-        Priority
-        <select value={priority} onChange={(e) => setPriority(Number(e.target.value))}>
-          <option value={0}>Normal</option>
-          <option value={1}>High</option>
-          <option value={2}>Urgent (out of water)</option>
-        </select>
-      </label>
-      <label>
-        Notes for the driver
-        <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
-      </label>
-      {!date || !driverId ? <p className="muted small">Without a date and driver the job waits in the request queue.</p> : null}
-      {error && <p className="error">{error}</p>}
-      <div className="actions">
-        <button type="button" onClick={onCancel}>Cancel</button>
-        <button className="primary" disabled={busy}>{busy ? 'Saving…' : job ? 'Save changes' : 'Create job'}</button>
-      </div>
+        {site?.tank_capacity_l ? <Text size="xs" c="dimmed" mt={-8}>Tank holds {fmtLitres(site.tank_capacity_l)}{site.access_notes ? ` · ${site.access_notes}` : ''}</Text> : null}
+        <SimpleGrid cols={{ base: 1, xs: 2 }} spacing="md">
+          <NumberInput label="Litres requested" placeholder="Fill to full" min={1} step={100} thousandSeparator="," value={amount} onChange={setAmount} leftSection={<IconDroplet size={18} />} />
+          <DatePickerInput label="Date" placeholder="Not scheduled" clearable value={date} onChange={(v) => setDate(v as string | null)} leftSection={<IconCalendar size={18} />} size="md" />
+          <Select label="Driver" placeholder="Not assigned" clearable data={(drivers.data ?? []).filter((d) => d.active).map((d) => ({ value: d.id, label: d.name }))} value={driverId} onChange={setDriverId} leftSection={<IconUser size={18} />} />
+          <Select label="Truck" placeholder="Driver picks on duty" clearable data={(trucks.data ?? []).map((t) => ({ value: t.id, label: t.name }))} value={truckId} onChange={setTruckId} leftSection={<IconTruck size={18} />} />
+        </SimpleGrid>
+        <Stack gap={4}>
+          <Text size="sm" fw={500}>Priority</Text>
+          <SegmentedControl
+            fullWidth
+            value={priority}
+            onChange={setPriority}
+            color={priority === '2' ? 'red' : priority === '1' ? 'orange' : 'water'}
+            data={[{ value: '0', label: 'Normal' }, { value: '1', label: 'High' }, { value: '2', label: 'Out of water' }]}
+          />
+        </Stack>
+        <Textarea label="Notes for the driver" autosize minRows={2} value={notes} onChange={(e) => setNotes(e.currentTarget.value)} />
+        {(!date || !driverId) && (
+          <Alert variant="light" color="gray" icon={<IconInfoCircle size={18} />} p="xs">
+            <Text size="sm">Without a date and a driver the job waits in Requests.</Text>
+          </Alert>
+        )}
+        {error && <Alert color="red">{error}</Alert>}
+        <Group justify="flex-end" gap="sm">
+          <Button variant="default" onClick={onCancel}>Cancel</Button>
+          <Button type="submit" loading={busy}>{job ? 'Save changes' : 'Create job'}</Button>
+        </Group>
+      </Stack>
     </form>
   );
 }
