@@ -1,20 +1,24 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
-  Alert, Anchor, Badge, Box, Button, Card, Center, Grid, Group, Image, Loader, Menu, NumberInput, SimpleGrid, Stack, Text, TextInput, Textarea, Timeline, Title,
+  Alert, Anchor, Badge, Box, Button, Center, Group, Image, Loader, Menu, MultiSelect, NumberInput, SimpleGrid, Stack, Text, TextInput, Textarea, Timeline, Title, Tooltip,
+  UnstyledButton, Collapse,
 } from '@mantine/core';
 import { DateTimePicker } from '@mantine/dates';
 import { modals } from '@mantine/modals';
 import {
-  IconArrowLeft, IconBan, IconCalendar, IconCopy, IconDots, IconDroplet, IconFileTypePdf, IconMapPin, IconPencil, IconPhone, IconReceipt, IconTruck, IconUser,
+  IconArrowLeft, IconBan, IconCopy, IconDots, IconFileTypePdf, IconPencil, IconPhone, IconReceipt, IconNavigation, IconWorld, IconRepeat,
+  IconChevronDown, IconAlertTriangleFilled, IconMessageCircle, IconCheck,
 } from '@tabler/icons-react';
-import { authedUrl, post, type JobDetail } from '../api';
+import { authedUrl, post, put, type JobDetail, type Settings, type User } from '../api';
+import Conversation from '../components/Conversation';
 import JobForm from '../components/JobForm';
+import LinesEditor from '../components/LinesEditor';
 import JobMap from '../components/Map';
 import StatusBadge from '../components/StatusBadge';
-import { Sheet } from '../components/ui';
-import { notifyError, notifyOk, useApi, useInvalidate } from '../hooks';
-import { dateTime, day, litres, time, todayIso } from '../format';
+import { Person, Section, Sheet, useIsMobile } from '../components/ui';
+import { notifyError, notifyOk, useApi, useInvalidate, useLive } from '../hooks';
+import { dateTime, day, litres, money, time, todayIso } from '../format';
 
 const ACTION_LABEL: Record<string, string> = {
   created: 'Job created',
@@ -25,39 +29,78 @@ const ACTION_LABEL: Record<string, string> = {
   completed: 'Delivery recorded',
   cancelled: 'Cancelled',
   entered_by_office: 'Entered by the office',
+  approved: 'Approved for billing',
+  rejected: 'Rejected',
+  lines_changed: 'Charges changed',
 };
 
 function describe(changes: Record<string, unknown> | null): string {
   if (!changes) return '';
   return Object.entries(changes)
-    .filter(([, v]) => v !== null && v !== undefined)
+    .filter(([k, v]) => v !== null && v !== undefined && k !== 'at')
     .map(([k, v]) => (Array.isArray(v) && v.length === 2 ? `${k.replace(/_/g, ' ')}: ${v[0] ?? '—'} → ${v[1] ?? '—'}` : `${k.replace(/_/g, ' ')}: ${typeof v === 'object' ? JSON.stringify(v) : v}`))
     .join(' · ');
 }
 
-function Field({ icon, label, children }: { icon: React.ReactNode; label: string; children: React.ReactNode }) {
+function KV({ items }: { items: [string, ReactNode][] }) {
   return (
-    <Group gap="sm" wrap="nowrap" align="flex-start">
-      <Box c="dimmed" pt={2}>{icon}</Box>
-      <Box style={{ minWidth: 0 }}>
-        <Text size="xs" c="dimmed">{label}</Text>
-        <Text size="sm" fw={500}>{children}</Text>
-      </Box>
-    </Group>
+    <dl className="wt-kv" style={{ margin: 0 }}>
+      {items.map(([k, v]) => (
+        <Box key={k} style={{ display: 'contents' }}>
+          <dt>{k}</dt>
+          <dd>{v}</dd>
+        </Box>
+      ))}
+    </dl>
+  );
+}
+
+function Followers({ jobId }: { jobId: string }) {
+  const users = useApi<User[]>('/users');
+  const followers = useApi<{ id: string; name: string }[]>(`/jobs/${jobId}/followers`);
+  const invalidate = useInvalidate();
+  const [value, setValue] = useState<string[]>([]);
+  useEffect(() => { setValue((followers.data ?? []).map((f) => f.id)); }, [followers.data]);
+  return (
+    <MultiSelect
+      label="Followers"
+      description="They're told about messages and changes on this job"
+      size="sm"
+      data={(users.data ?? []).filter((u) => u.active !== false).map((u) => ({ value: u.id, label: u.name }))}
+      value={value}
+      onChange={async (v) => {
+        setValue(v);
+        try {
+          await put(`/jobs/${jobId}/followers`, { user_ids: v });
+          void invalidate(`/jobs/${jobId}/followers`);
+        } catch (e) {
+          notifyError(e);
+        }
+      }}
+      searchable
+      hidePickedOptions
+      placeholder={value.length ? undefined : 'Add people'}
+    />
   );
 }
 
 export default function JobDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const mobile = useIsMobile();
   const job = useApi<JobDetail>(`/jobs/${id}`);
+  const settings = useApi<Settings>('/settings');
   const invalidate = useInvalidate();
   const [editing, setEditing] = useState(false);
   const [entering, setEntering] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  useLive((e) => {
+    if (e.type === 'job' && e.jobId === id) void invalidate(`/jobs/${id}`);
+  });
 
-  if (job.error) return <Box p="md"><Alert color="red">{(job.error as Error).message}</Alert></Box>;
+  if (job.error) return <Alert color="red">{(job.error as Error).message}</Alert>;
   const j = job.data;
-  if (!j) return <Center h={300}><Loader /></Center>;
+  if (!j) return <Center h={300}><Loader type="dots" /></Center>;
   const open = !['completed', 'cancelled'].includes(j.status);
   const refresh = () => invalidate('/jobs');
 
@@ -91,151 +134,196 @@ export default function JobDetailPage() {
   }
 
   const meterDiff = j.meter_start !== null && j.meter_end !== null ? j.meter_end - j.meter_start : null;
+  const fieldLabel = (k: string) => settings.data?.form.fields.find((f) => f.key === k)?.label ?? k.replace(/_/g, ' ');
+  const steps = [
+    { title: 'Requested', at: j.created_at, sub: j.source === 'portal' ? `Online by ${j.requester_name ?? 'resident'}` : j.source === 'recurring' ? 'Standing order' : 'By the office', show: true },
+    { title: 'On the way', at: j.started_at, sub: j.truck_name ?? '', show: true },
+    { title: 'Arrived', at: j.arrived_at, sub: j.arrived_at ? (j.arrival_source === 'manual' ? 'Driver tapped arrived' : 'GPS geofence') : '', show: true },
+    { title: j.status === 'cancelled' ? 'Cancelled' : 'Delivered', at: j.completed_at ?? j.cancelled_at, sub: j.delivered_litres !== null ? litres(j.delivered_litres) : '', show: true },
+  ];
+  const reached = steps.filter((s) => s.at).length - 1;
+
+  const actions = (
+    <Group gap={8} wrap="nowrap">
+      {j.status === 'completed' && (
+        <Button component="a" href={authedUrl(`/jobs/${j.id}/ticket.pdf`)} target="_blank" rel="noreferrer" variant="default" leftSection={<IconFileTypePdf size={18} />} visibleFrom="sm">
+          Ticket
+        </Button>
+      )}
+      {open && <Button variant="default" leftSection={<IconPencil size={16} />} onClick={() => setEditing(true)} visibleFrom="sm">Edit</Button>}
+      <Menu position="bottom-end" width={230}>
+        <Menu.Target>
+          <Button variant="default" px={10} aria-label="More actions"><IconDots size={18} /></Button>
+        </Menu.Target>
+        <Menu.Dropdown>
+          {j.status === 'completed' && (
+            <Menu.Item component="a" href={authedUrl(`/jobs/${j.id}/ticket.pdf`)} target="_blank" leftSection={<IconFileTypePdf size={16} />} hiddenFrom="sm">Delivery ticket (PDF)</Menu.Item>
+          )}
+          {open && <Menu.Item leftSection={<IconPencil size={16} />} onClick={() => setEditing(true)} hiddenFrom="sm">Edit job</Menu.Item>}
+          <Menu.Item leftSection={<IconCopy size={16} />} onClick={() => void clone()}>Repeat for today</Menu.Item>
+          {open && <Menu.Item leftSection={<IconReceipt size={16} />} onClick={() => setEntering(true)}>Enter paper ticket</Menu.Item>}
+          {j.site_lat !== null && (
+            <Menu.Item component="a" href={`https://www.google.com/maps/dir/?api=1&destination=${j.site_lat},${j.site_lng}`} target="_blank" leftSection={<IconNavigation size={16} />}>Directions</Menu.Item>
+          )}
+          {open && (
+            <>
+              <Menu.Divider />
+              <Menu.Item color="red" leftSection={<IconBan size={16} />} onClick={cancel}>Cancel job</Menu.Item>
+            </>
+          )}
+        </Menu.Dropdown>
+      </Menu>
+    </Group>
+  );
+
+  const delivery = (
+    <Section title="Delivery">
+      {j.status === 'completed' ? (
+        <Stack gap="md">
+          <Group align="flex-end" gap="md" wrap="wrap">
+            <Box>
+              <div className="wt-big-number">{litres(j.delivered_litres)}</div>
+              <Text c="dimmed" size="sm" mt={6}>Delivered {dateTime(j.delivered_at ?? j.completed_at)}</Text>
+            </Box>
+            {j.requested_litres && <Text size="sm" c="dimmed" mb={4}>of {litres(j.requested_litres)} requested</Text>}
+          </Group>
+          <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="sm">
+            {([['Meter start', j.meter_start ?? '—'], ['Meter end', j.meter_end ?? '—'], ['Meter difference', meterDiff === null ? '—' : litres(meterDiff)], ['Received by', j.recipient_name ?? '—']] as const).map(([k, v]) => (
+              <Box key={k} p="sm" style={{ background: 'var(--wt-surface-2)', borderRadius: 10, border: '1px solid var(--wt-border)' }}>
+                <Text size="xs" c="dimmed">{k}</Text>
+                <Text fw={600} className="wt-num" truncate>{typeof v === 'number' ? v.toLocaleString('en-CA') : v}</Text>
+              </Box>
+            ))}
+          </SimpleGrid>
+          {j.form_data && Object.keys(j.form_data).length > 0 && (
+            <Box>
+              <Text className="wt-section-title" mb={6}>Driver's checklist</Text>
+              <KV items={Object.entries(j.form_data).map(([k, v]) => [fieldLabel(k), v === true ? <Group gap={4} c="teal"><IconCheck size={15} />Yes</Group> : v === false ? 'No' : String(v ?? '—')])} />
+            </Box>
+          )}
+          {j.delivery_notes && <Text size="sm"><Text span c="dimmed">Driver notes: </Text>{j.delivery_notes}</Text>}
+          {(j.meter_photo_id || j.signature_id) && (
+            <SimpleGrid cols={{ base: 1, xs: 2 }} spacing="sm">
+              {j.meter_photo_id && (
+                <a href={authedUrl(`/files/${j.meter_photo_id}`)} target="_blank" rel="noreferrer">
+                  <Image src={authedUrl(`/files/${j.meter_photo_id}`)} alt="Meter reading" className="wt-photo" />
+                </a>
+              )}
+              {j.signature_id && <Image src={authedUrl(`/files/${j.signature_id}`)} alt="Signature" className="wt-sig" fit="contain" />}
+            </SimpleGrid>
+          )}
+        </Stack>
+      ) : (
+        <Text c="dimmed" size="sm">{j.status === 'cancelled' ? 'Cancelled before delivery.' : 'Not delivered yet. The driver records litres, a meter photo, the checklist and a signature on their phone.'}</Text>
+      )}
+    </Section>
+  );
+
+  const details = (
+    <Section title="Details">
+      <Stack gap="md">
+        <KV
+          items={[
+            ['Customer', <Group key="c" gap={6} wrap="nowrap"><Link className="wt-link" to={`/customers/${j.customer_id}`}>{j.customer_name}</Link></Group>],
+            ...(j.customer_phone ? [['Phone', <Anchor key="p" href={`tel:${j.customer_phone}`} size="sm"><IconPhone size={13} /> {j.customer_phone}</Anchor>] as [string, ReactNode]] : []),
+            ['Delivery point', `${j.site_label}${j.site_address ? `, ${j.site_address}` : ''}`],
+            ['Date', day(j.scheduled_date)],
+            ['Requested', j.requested_litres ? litres(j.requested_litres) : 'Fill to full'],
+            ['Driver', j.driver_name ? <Group key="d" gap={6}><Person name={j.driver_name} size={20} />{j.driver_name}</Group> : '—'],
+            ['Truck', j.truck_name ?? '—'],
+            ...(j.requester_name ? [['Asked by', `${j.requester_name}${j.requester_phone ? ` · ${j.requester_phone}` : ''}`] as [string, ReactNode]] : []),
+            ...(j.tags?.length ? [['Tags', <Group key="t" gap={4}>{j.tags.map((t) => <Badge key={t} variant="default" size="sm">{t}</Badge>)}</Group>] as [string, ReactNode]] : []),
+          ]}
+        />
+        {j.site_access_notes && <Alert color="yellow" p="xs" variant="light"><Text size="sm"><b>Access:</b> {j.site_access_notes}</Text></Alert>}
+        {j.notes && <Text size="sm"><Text span c="dimmed">Notes: </Text>{j.notes}</Text>}
+        <Followers jobId={j.id} />
+      </Stack>
+    </Section>
+  );
+
+  const progress = (
+    <Section title="Progress">
+      <Timeline bulletSize={20} lineWidth={2} active={reached} color={j.status === 'cancelled' ? 'gray' : 'water'}>
+        {steps.map((s) => (
+          <Timeline.Item key={s.title} title={<Text size="sm" fw={600}>{s.title}</Text>} bullet={s.at ? <IconCheck size={12} /> : undefined}>
+            <Text size="xs" c="dimmed">{s.at ? `${time(s.at)}${s.sub ? ` · ${s.sub}` : ''}` : 'Not yet'}</Text>
+          </Timeline.Item>
+        ))}
+      </Timeline>
+      <UnstyledButton mt="md" onClick={() => setShowHistory((v) => !v)}>
+        <Group gap={4}><Text size="sm" fw={600} c="water">Full history ({j.audit.length})</Text><IconChevronDown size={14} style={{ transform: showHistory ? 'rotate(180deg)' : undefined, transition: 'transform 160ms' }} /></Group>
+      </UnstyledButton>
+      <Collapse expanded={showHistory}>
+        <Stack gap={10} mt="sm">
+          {j.audit.map((a, i) => (
+            <Box key={i} pl="sm" style={{ borderLeft: '2px solid var(--wt-border)' }}>
+              <Group justify="space-between" gap="xs" wrap="nowrap">
+                <Text size="sm" fw={600}>{ACTION_LABEL[a.action] ?? a.action}</Text>
+                <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>{dateTime(a.at)}</Text>
+              </Group>
+              <Text size="xs" c="dimmed">
+                {a.actor_name ? `by ${a.actor_name}` : 'automatic'}
+                {['updated', 'assigned', 'cancelled', 'completed', 'approved', 'rejected'].includes(a.action) && describe(a.changes) ? ` · ${describe(a.changes)}` : ''}
+              </Text>
+            </Box>
+          ))}
+        </Stack>
+      </Collapse>
+    </Section>
+  );
+
+  const chat = (
+    <Section title={<Group gap={8}><IconMessageCircle size={18} /><Text fw={650}>Messages</Text>{j.driver_name && <Text size="sm" c="dimmed">with {j.driver_name.split(' ')[0]}</Text>}</Group>}>
+      <Conversation jobId={j.id} />
+    </Section>
+  );
+
+  const billing = j.status === 'completed' && (
+    <Section title={<Group gap={8}><Text fw={650}>Charges</Text>{j.amount > 0 && <Text size="sm" c="dimmed" className="wt-num">{money(j.amount)} before tax</Text>}</Group>}>
+      <LinesEditor job={j} />
+    </Section>
+  );
 
   return (
-    <Box p={{ base: 'md', lg: 'lg' }} maw={1280}>
-      <Anchor component={Link} to="/" size="sm" c="dimmed">
+    <Box maw={1320} mx="auto">
+      <Anchor component={Link} to="/" size="sm" c="dimmed" underline="never">
         <Group gap={4}><IconArrowLeft size={16} />Dispatch</Group>
       </Anchor>
-      <Group justify="space-between" align="flex-start" mt="xs" mb="md" wrap="nowrap">
+      <Group justify="space-between" align="flex-start" mt="sm" mb="lg" wrap="nowrap" gap="sm">
         <Box style={{ minWidth: 0 }}>
-          <Group gap="sm">
-            <Title order={2} fz={{ base: 22, sm: 26 }}>Job #{j.number}</Title>
+          <Group gap={10} wrap="wrap">
+            <Title order={1} fz={{ base: 24, sm: 28 }}>{j.site_label}</Title>
             <StatusBadge status={j.status} size="lg" />
-            {j.priority === 2 && <Badge color="red" variant="filled">Out of water</Badge>}
           </Group>
-          <Text c="dimmed" size="sm" truncate>{j.site_label}{j.site_address ? ` · ${j.site_address}` : ''}</Text>
+          <Group gap={8} mt={6} wrap="wrap">
+            <Text c="dimmed" size="sm" className="wt-num">Job #{j.number}</Text>
+            {j.priority === 2 && <Badge color="red" variant="light" leftSection={<IconAlertTriangleFilled size={12} />}>Out of water</Badge>}
+            {j.priority === 1 && <Badge color="orange" variant="light">High priority</Badge>}
+            {j.source === 'portal' && <Tooltip label="Requested by the resident online"><Badge variant="light" color="cyan" leftSection={<IconWorld size={12} />}>Online request</Badge></Tooltip>}
+            {j.source === 'recurring' && <Badge variant="light" color="violet" leftSection={<IconRepeat size={12} />}>Standing order</Badge>}
+            {j.approval_status === 'pending' && <Badge variant="light" color="orange">Needs review</Badge>}
+            {j.invoice_number && <Badge variant="light" color="teal">Invoice #{j.invoice_number}</Badge>}
+          </Group>
         </Box>
-        <Group gap="xs" wrap="nowrap">
-          {j.status === 'completed' && (
-            <Button component="a" href={authedUrl(`/jobs/${j.id}/ticket.pdf`)} target="_blank" rel="noreferrer" leftSection={<IconFileTypePdf size={18} />} visibleFrom="sm">
-              Delivery ticket
-            </Button>
-          )}
-          {open && <Button variant="default" leftSection={<IconPencil size={16} />} onClick={() => setEditing(true)} visibleFrom="sm">Edit</Button>}
-          <Menu position="bottom-end" shadow="md" width={230}>
-            <Menu.Target>
-              <Button variant="default" px="xs" aria-label="More actions"><IconDots size={18} /></Button>
-            </Menu.Target>
-            <Menu.Dropdown>
-              {j.status === 'completed' && (
-                <Menu.Item component="a" href={authedUrl(`/jobs/${j.id}/ticket.pdf`)} target="_blank" leftSection={<IconFileTypePdf size={16} />} hiddenFrom="sm">Delivery ticket (PDF)</Menu.Item>
-              )}
-              {open && <Menu.Item leftSection={<IconPencil size={16} />} onClick={() => setEditing(true)} hiddenFrom="sm">Edit job</Menu.Item>}
-              <Menu.Item leftSection={<IconCopy size={16} />} onClick={() => void clone()}>Repeat for today</Menu.Item>
-              {open && <Menu.Item leftSection={<IconReceipt size={16} />} onClick={() => setEntering(true)}>Enter paper ticket</Menu.Item>}
-              {open && (
-                <>
-                  <Menu.Divider />
-                  <Menu.Item color="red" leftSection={<IconBan size={16} />} onClick={cancel}>Cancel job</Menu.Item>
-                </>
-              )}
-            </Menu.Dropdown>
-          </Menu>
-        </Group>
+        {actions}
       </Group>
 
-      <Grid gap="md">
-        <Grid.Col span={{ base: 12, md: 7 }}>
-          <Stack gap="md">
-            <Card p={0} style={{ overflow: 'hidden' }}>
-              <JobMap jobs={[j]} trail={j.trail.map((p) => [p.lat, p.lng])} height={340} radius={0} />
-              <Group justify="space-between" p="sm">
-                <Text size="xs" c="dimmed">{j.trail.length ? `Route: ${j.trail.length} GPS points` : 'No GPS route recorded for this job'}</Text>
-                {j.site_lat !== null && (
-                  <Anchor size="xs" href={`https://www.google.com/maps/dir/?api=1&destination=${j.site_lat},${j.site_lng}`} target="_blank">Directions</Anchor>
-                )}
-              </Group>
-            </Card>
-            <Card>
-              <Title order={4} mb="md">Delivery</Title>
-              {j.status === 'completed' ? (
-                <Stack gap="md">
-                  <Group align="baseline" gap="xs">
-                    <Text fz={36} fw={800} lh={1} c="teal">{litres(j.delivered_litres)}</Text>
-                    <Text c="dimmed" size="sm">delivered {dateTime(j.delivered_at ?? j.completed_at)}</Text>
-                  </Group>
-                  <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="sm">
-                    <Field icon={<IconDroplet size={16} />} label="Meter start">{j.meter_start ?? '—'}</Field>
-                    <Field icon={<IconDroplet size={16} />} label="Meter end">{j.meter_end ?? '—'}</Field>
-                    <Field icon={<IconDroplet size={16} />} label="Meter difference">{meterDiff === null ? '—' : litres(meterDiff)}</Field>
-                    <Field icon={<IconUser size={16} />} label="Received by">{j.recipient_name ?? '—'}</Field>
-                  </SimpleGrid>
-                  {meterDiff !== null && Math.abs(meterDiff - (j.delivered_litres ?? 0)) > 1 && (
-                    <Alert color="orange" p="xs">The meter difference doesn't match the litres entered.</Alert>
-                  )}
-                  {j.delivery_notes && <Text size="sm"><Text span c="dimmed">Driver notes: </Text>{j.delivery_notes}</Text>}
-                  {(j.meter_photo_id || j.signature_id) && (
-                    <SimpleGrid cols={{ base: 1, xs: 2 }} spacing="sm">
-                      {j.meter_photo_id && (
-                        <a href={authedUrl(`/files/${j.meter_photo_id}`)} target="_blank" rel="noreferrer">
-                          <Image src={authedUrl(`/files/${j.meter_photo_id}`)} alt="Meter reading" className="wt-photo" />
-                        </a>
-                      )}
-                      {j.signature_id && <Image src={authedUrl(`/files/${j.signature_id}`)} alt="Signature" className="wt-sig" fit="contain" />}
-                    </SimpleGrid>
-                  )}
-                </Stack>
-              ) : (
-                <Text c="dimmed" size="sm">{j.status === 'cancelled' ? 'Cancelled before delivery.' : 'Not delivered yet. The driver records litres, the meter photo and a signature on their phone.'}</Text>
-              )}
-            </Card>
-          </Stack>
-        </Grid.Col>
-        <Grid.Col span={{ base: 12, md: 5 }}>
-          <Stack gap="md">
-            <Card>
-              <Title order={4} mb="md">Details</Title>
-              <Stack gap="sm">
-                <Field icon={<IconUser size={16} />} label="Customer">
-                  {j.customer_name}
-                  {j.customer_phone && <> · <Anchor href={`tel:${j.customer_phone}`} size="sm"><IconPhone size={13} /> {j.customer_phone}</Anchor></>}
-                </Field>
-                <Field icon={<IconMapPin size={16} />} label="Delivery point">{j.site_label}{j.site_address ? `, ${j.site_address}` : ''}</Field>
-                {j.site_access_notes && <Alert color="yellow" p="xs" variant="light"><Text size="sm">Access: {j.site_access_notes}</Text></Alert>}
-                <SimpleGrid cols={2} spacing="sm">
-                  <Field icon={<IconCalendar size={16} />} label="Date">{day(j.scheduled_date)}</Field>
-                  <Field icon={<IconDroplet size={16} />} label="Requested">{j.requested_litres ? litres(j.requested_litres) : 'Fill to full'}</Field>
-                  <Field icon={<IconUser size={16} />} label="Driver">{j.driver_name ?? '—'}</Field>
-                  <Field icon={<IconTruck size={16} />} label="Truck">{j.truck_name ?? '—'}</Field>
-                </SimpleGrid>
-                {j.notes && <Text size="sm"><Text span c="dimmed">Notes: </Text>{j.notes}</Text>}
-              </Stack>
-            </Card>
-            <Card>
-              <Title order={4} mb="md">Progress</Title>
-              <Timeline bulletSize={18} lineWidth={2} active={[j.created_at, j.started_at, j.arrived_at, j.completed_at].filter(Boolean).length - 1} color="water">
-                <Timeline.Item title="Created"><Text size="xs" c="dimmed">{dateTime(j.created_at)}</Text></Timeline.Item>
-                <Timeline.Item title="Driver on the way"><Text size="xs" c="dimmed">{j.started_at ? time(j.started_at) : 'Not yet'}</Text></Timeline.Item>
-                <Timeline.Item title="Arrived">
-                  <Text size="xs" c="dimmed">{j.arrived_at ? `${time(j.arrived_at)} · ${j.arrival_source === 'manual' ? 'driver tapped arrived' : 'GPS geofence'}` : 'Not yet'}</Text>
-                </Timeline.Item>
-                <Timeline.Item title={j.status === 'cancelled' ? 'Cancelled' : 'Delivered'} color={j.status === 'cancelled' ? 'gray' : 'teal'}>
-                  <Text size="xs" c="dimmed">{j.completed_at ? time(j.completed_at) : j.cancelled_at ? dateTime(j.cancelled_at) : 'Not yet'}</Text>
-                </Timeline.Item>
-              </Timeline>
-            </Card>
-            <Card>
-              <Title order={4} mb="md">History</Title>
-              {j.audit.length === 0 && <Text size="sm" c="dimmed">No history recorded.</Text>}
-              <Stack gap="xs">
-                {j.audit.map((a, i) => (
-                  <Box key={i}>
-                    <Group justify="space-between" gap="xs" wrap="nowrap">
-                      <Text size="sm" fw={600}>{ACTION_LABEL[a.action] ?? a.action}</Text>
-                      <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>{dateTime(a.at)}</Text>
-                    </Group>
-                    <Text size="xs" c="dimmed">
-                      {a.actor_name ? `by ${a.actor_name}` : ''}
-                      {['updated', 'assigned', 'cancelled', 'completed'].includes(a.action) && describe(a.changes) ? ` · ${describe(a.changes)}` : ''}
-                    </Text>
-                  </Box>
-                ))}
-              </Stack>
-            </Card>
-          </Stack>
-        </Grid.Col>
-      </Grid>
+      <Box style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : 'minmax(0, 1.45fr) minmax(340px, 1fr)', gap: 16, alignItems: 'start' }}>
+        <Stack gap="md">
+          <Box style={{ borderRadius: 14, overflow: 'hidden' }}>
+            <JobMap jobs={[j]} trail={j.trail.map((p) => [p.lat, p.lng])} height={mobile ? 260 : 360} />
+          </Box>
+          {delivery}
+          {billing}
+          {mobile && chat}
+        </Stack>
+        <Stack gap="md" style={mobile ? undefined : { position: 'sticky', top: 24 }}>
+          {!mobile && chat}
+          {details}
+          {progress}
+        </Stack>
+      </Box>
 
       <Sheet opened={editing} onClose={() => setEditing(false)} title={`Edit job #${j.number}`}>
         <JobForm job={j} onCancel={() => setEditing(false)} onSaved={() => setEditing(false)} />

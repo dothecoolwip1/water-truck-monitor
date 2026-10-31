@@ -1,12 +1,12 @@
 import { useMemo, useRef, useState } from 'react';
-import { Alert, Image, KeyboardAvoidingView, Platform, ScrollView, View } from 'react-native';
+import { Alert, Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import SignaturePad, { type SignatureHandle } from '../../components/SignaturePad';
 import { BigButton, Card, Field, litres, parseNum, Screen, T, useTheme } from '../../components/ui';
 import { currentPosition } from '../../lib/location';
 import { discard, keep, takeMeterPhoto } from '../../lib/photos';
 import { useStore } from '../../lib/store';
-import type { PhotoRef } from '../../lib/types';
+import type { FormField, FormValue, PhotoRef } from '../../lib/types';
 
 export default function CompleteScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -34,6 +34,8 @@ export default function CompleteScreen() {
   const [recipient, setRecipient] = useState('');
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
+  const fields = s.today?.form_fields ?? [];
+  const [answers, setAnswers] = useState<Record<string, FormValue>>({});
 
   if (!job) return <Screen style={{ padding: 16 }}><T>Job not found.</T></Screen>;
 
@@ -59,6 +61,8 @@ export default function CompleteScreen() {
   async function save() {
     if (value === null || value < 0) return Alert.alert('Litres needed', 'Enter how many litres went into the tank.');
     if (meterBackwards) return Alert.alert('Check the meter', 'The end reading is lower than the start reading.');
+    const missing = fields.find((f) => f.required && (answers[f.key] === undefined || answers[f.key] === null || answers[f.key] === ''));
+    if (missing) return Alert.alert('Checklist', `Please answer "${missing.label}".`);
     const proceed = async () => {
       setBusy(true);
       try {
@@ -75,6 +79,7 @@ export default function CompleteScreen() {
           signature,
           lat: pos?.lat ?? null,
           lng: pos?.lng ?? null,
+          form_data: fields.length ? answers : null,
         });
         router.dismissTo('/');
       } catch (e) {
@@ -117,6 +122,15 @@ export default function CompleteScreen() {
             <BigButton kind={photo ? 'secondary' : 'primary'} small title={photo ? 'Retake photo' : 'Take photo'} onPress={snap} />
           </Card>
 
+          {fields.length > 0 && (
+            <Card style={{ gap: 14 }}>
+              <T weight="700">Checklist</T>
+              {fields.map((f) => (
+                <Question key={f.key} field={f} value={answers[f.key]} onChange={(v) => setAnswers((a) => ({ ...a, [f.key]: v }))} />
+              ))}
+            </Card>
+          )}
+
           <Field label="Received by (optional)" value={recipient} onChangeText={setRecipient} autoCapitalize="words" style={{ fontSize: 18 }} />
           <View
             onTouchStart={() => setScrollOn(false)}
@@ -132,5 +146,35 @@ export default function CompleteScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
     </Screen>
+  );
+}
+
+/** One checklist question, sized for gloves: big tap targets, no tiny pickers. */
+function Question({ field, value, onChange }: { field: FormField; value: FormValue | undefined; onChange: (v: FormValue) => void }) {
+  const t = useTheme();
+  const label = `${field.label}${field.required ? '' : ' (optional)'}`;
+  if (field.type === 'text' || field.type === 'number') {
+    return (
+      <Field label={label} value={value == null ? '' : String(value)} keyboardType={field.type === 'number' ? 'decimal-pad' : 'default'}
+        onChangeText={(v) => onChange(field.type === 'number' ? parseNum(v) : v)} style={{ fontSize: 18 }} />
+    );
+  }
+  const options = field.type === 'yesno' ? [{ v: true, l: 'Yes' }, { v: false, l: 'No' }] : (field.options ?? []).map((o) => ({ v: o, l: o }));
+  return (
+    <View style={{ gap: 8 }}>
+      <T size={15} weight="600">{label}</T>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+        {options.map((o) => {
+          const on = value === o.v;
+          return (
+            <Pressable key={String(o.v)} onPress={() => onChange(on ? null : o.v)} accessibilityRole="button" accessibilityState={{ selected: on }}
+              style={{ minHeight: 48, minWidth: 88, paddingHorizontal: 16, borderRadius: 12, borderWidth: 2, alignItems: 'center', justifyContent: 'center',
+                borderColor: on ? t.accent : t.border, backgroundColor: on ? t.accent : t.card }}>
+              <T weight="700" color={on ? t.accentText : t.text}>{o.l}</T>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
   );
 }

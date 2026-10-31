@@ -90,6 +90,7 @@ export default function JobScreen() {
             )}
           </View>
         )}
+        <BigButton kind="secondary" small title={job.comment_count ? `Messages (${job.comment_count})` : 'Message the office'} onPress={() => router.push(`/chat/${job.id}`)} />
         <View style={{ gap: 2 }}>
           {job.started_at && <T size={14} muted>Started {clock(job.started_at)}</T>}
           {job.arrived_at && <T size={14} muted>Arrived {clock(job.arrived_at)}</T>}

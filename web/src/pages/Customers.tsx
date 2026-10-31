@@ -11,6 +11,8 @@ import { patch, post, type Customer, type Job, type Site } from '../api';
 import JobMap, { type PickedPoint } from '../components/Map';
 import { EmptyState, PageHeader, Sheet, useIsMobile } from '../components/ui';
 import { csvObjects } from '../csv';
+import { RecurringSection } from '../components/Recurring';
+import { RatesSection } from '../components/Rates';
 import { notifyOk, useApi, useInvalidate } from '../hooks';
 import { litres } from '../format';
 
@@ -118,15 +120,20 @@ export default function Customers() {
         ))}
         {currentSites.length === 0 && <EmptyState icon={<IconMapPin size={24} />} title="No delivery points">Add one and tap the house on the map.</EmptyState>}
       </Stack>
+      <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="md">
+        <RecurringSection customerId={current.id} />
+        <RatesSection customerId={current.id} />
+      </SimpleGrid>
     </Stack>
   ) : (
     <EmptyState icon={<IconUsers size={24} />} title="Pick a customer">Their delivery points, tank sizes and access notes show here.</EmptyState>
   );
 
   return (
-    <Box p={{ base: 'md', lg: 'lg' }}>
+    <>
       {!(mobile && current) && (
         <PageHeader
+          eyebrow="Operations"
           title="Customers"
           subtitle={`${customers.data?.length ?? 0} customers · ${sites.data?.length ?? 0} delivery points`}
           actions={
@@ -161,7 +168,7 @@ export default function Customers() {
       <Sheet opened={importing} onClose={() => setImporting(false)} title="Import customers from a spreadsheet" size="xl">
         <ImportForm onDone={() => setImporting(false)} />
       </Sheet>
-    </Box>
+    </>
   );
 }
 

@@ -1,25 +1,26 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  ActionIcon, Affix, Badge, Box, Button, Card, Group, Indicator, Menu, Paper, ScrollArea, SegmentedControl, SimpleGrid, Stack, Text, Tooltip,
-} from '@mantine/core';
-import { useMediaQuery } from '@mantine/hooks';
+import { ActionIcon, Box, Button, Group, Menu, ScrollArea, SegmentedControl, SimpleGrid, Stack, Text, Tooltip } from '@mantine/core';
+import { useLocalStorage, useMediaQuery } from '@mantine/hooks';
 import {
   DndContext, DragOverlay, KeyboardSensor, PointerSensor, TouchSensor, closestCorners, useDroppable, useSensor, useSensors,
   type DragEndEvent, type DragOverEvent, type DragStartEvent,
 } from '@dnd-kit/core';
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { AnimatePresence, motion } from 'motion/react';
 import {
-  IconArrowDown, IconArrowUp, IconCircleCheck, IconDots, IconDroplet, IconGripVertical, IconInbox, IconList, IconMap, IconPlus, IconTruck, IconUserCheck,
+  IconArrowDown, IconArrowUp, IconCircleCheck, IconCircleCheckFilled, IconDots, IconDroplet, IconGripVertical, IconInbox, IconLayoutColumns,
+  IconLayoutKanban, IconList, IconMap, IconPlus, IconTruck, IconAlertTriangle,
 } from '@tabler/icons-react';
 import { post, type Job, type LivePosition, type User } from '../api';
+import JobCard from '../components/JobCard';
 import JobForm from '../components/JobForm';
 import JobMap from '../components/Map';
-import StatusBadge from '../components/StatusBadge';
-import { DayPicker, EmptyState, PageHeader, Sheet, StatCard, useIsMobile } from '../components/ui';
+import { DayPicker, EmptyState, ListSkeleton, PageHeader, Person, Sheet, StatCard } from '../components/ui';
+import { useIsMobile } from '../components/ui';
 import { notifyError, useApi, useInvalidate, useLive } from '../hooks';
-import { compactLitres, day, litres, longDay, time, todayIso } from '../format';
+import { compactLitres, litres, longDay, todayIso } from '../format';
 
 const QUEUE = '__queue__';
 
@@ -31,51 +32,7 @@ interface Column {
   jobs: Job[];
 }
 
-function JobCard({ job, inQueue, onOpen, actions, handle, dragging, overlay }: {
-  job: Job; inQueue: boolean; onOpen?: () => void; actions?: React.ReactNode; handle?: React.ReactNode; dragging?: boolean; overlay?: boolean;
-}) {
-  const sub = job.customer_name !== job.site_label ? job.customer_name : job.site_address;
-  return (
-    <Card
-      padding="sm"
-      radius="md"
-      className="wt-job"
-      data-urgent={job.priority === 2 || undefined}
-      data-dragging={dragging || undefined}
-      data-overlay={overlay || undefined}
-      onClick={onOpen}
-    >
-      <Group gap={6} wrap="nowrap" align="flex-start">
-        {handle}
-        <Stack gap={4} style={{ flex: 1, minWidth: 0 }}>
-          <Group justify="space-between" gap={6} wrap="nowrap">
-            <Text fw={700} size="sm" truncate>
-              <Text span c="dimmed" fw={600} size="sm">#{job.number}</Text> {job.site_label}
-            </Text>
-            <StatusBadge status={job.status} size="xs" />
-          </Group>
-          {sub && <Text size="xs" c="dimmed" truncate>{sub}</Text>}
-          <Group justify="space-between" gap={6} wrap="nowrap">
-            <Group gap={6} wrap="nowrap">
-              <IconDroplet size={14} color="var(--mantine-color-water-5)" />
-              <Text size="xs" fw={job.status === 'completed' ? 700 : 500}>
-                {job.status === 'completed' ? litres(job.delivered_litres) : job.requested_litres ? litres(job.requested_litres) : 'Fill to full'}
-              </Text>
-              {job.priority === 2 && <Badge color="red" size="xs" variant="filled">Out of water</Badge>}
-              {job.priority === 1 && <Badge color="orange" size="xs">High</Badge>}
-            </Group>
-            <Text size="xs" c="dimmed">
-              {job.completed_at ? `Done ${time(job.completed_at)}` : job.arrived_at ? `On site ${time(job.arrived_at)}` : inQueue && job.scheduled_date ? day(job.scheduled_date) : ''}
-            </Text>
-          </Group>
-        </Stack>
-        {actions}
-      </Group>
-    </Card>
-  );
-}
-
-function SortableJob({ job, inQueue, onOpen, onHover }: { job: Job; inQueue: boolean; onOpen: () => void; onHover: (id: string | null) => void }) {
+function SortableJob({ job, onOpen, onHover, highlight }: { job: Job; onOpen: () => void; onHover: (id: string | null) => void; highlight: boolean }) {
   const movable = job.status !== 'completed';
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: job.id, disabled: !movable });
   return (
@@ -87,70 +44,88 @@ function SortableJob({ job, inQueue, onOpen, onHover }: { job: Job; inQueue: boo
     >
       <JobCard
         job={job}
-        inQueue={inQueue}
         onOpen={onOpen}
         dragging={isDragging}
+        highlight={highlight}
+        showDriver={false}
         handle={
           movable ? (
-            <Box className="wt-drag" {...attributes} {...listeners} onClick={(e) => e.stopPropagation()} aria-label="Drag to move" pt={2}>
+            <Box className="wt-drag" {...attributes} {...listeners} onClick={(e) => e.stopPropagation()} aria-label="Drag to move" pt={1} ml={-4}>
               <IconGripVertical size={16} />
             </Box>
-          ) : (
-            <Box pt={2} c="teal"><IconCircleCheck size={16} /></Box>
-          )
+          ) : undefined
         }
       />
     </div>
   );
 }
 
-function BoardColumn({ col, children, count }: { col: Column; children: React.ReactNode; count: number }) {
-  const { setNodeRef, isOver } = useDroppable({ id: `col:${col.id}` });
+function ColumnHeader({ col }: { col: Column }) {
   const planned = col.jobs.reduce((s, j) => s + (j.requested_litres ?? 0), 0);
   const delivered = col.jobs.reduce((s, j) => s + (j.delivered_litres ?? 0), 0);
+  const done = col.jobs.filter((j) => j.status === 'completed').length;
+  if (!col.driver) {
+    return (
+      <Group gap={10} wrap="nowrap" px={4} pt={2} pb={10}>
+        <Box w={32} h={32} style={{ borderRadius: 99, display: 'grid', placeItems: 'center', background: 'color-mix(in srgb, #f59e0b 14%, transparent)', color: '#d97706' }}>
+          <IconInbox size={17} />
+        </Box>
+        <Box>
+          <Text fw={650} size="sm">Requests</Text>
+          <Text size="xs" c="dimmed">{col.jobs.length === 0 ? 'All assigned' : `${col.jobs.length} waiting to assign`}</Text>
+        </Box>
+      </Group>
+    );
+  }
   return (
-    <Paper ref={setNodeRef} className="wt-column" data-over={isOver || undefined} withBorder p="sm" radius="lg" bg="var(--mantine-color-default-hover)">
-      <Group justify="space-between" mb="sm" wrap="nowrap">
-        <Group gap={8} wrap="nowrap" style={{ minWidth: 0 }}>
-          {col.driver ? (
-            <Indicator color={col.onDuty ? 'teal' : 'gray'} size={9} offset={3} position="bottom-end" withBorder>
-              <Box w={28} h={28} style={{ borderRadius: 99, display: 'grid', placeItems: 'center', background: 'var(--mantine-color-water-light)' }}>
-                <IconTruck size={16} color="var(--mantine-color-water-6)" />
-              </Box>
-            </Indicator>
-          ) : (
-            <Box w={28} h={28} style={{ borderRadius: 99, display: 'grid', placeItems: 'center', background: 'var(--mantine-color-yellow-light)' }}>
-              <IconInbox size={16} color="var(--mantine-color-yellow-7)" />
-            </Box>
-          )}
+    <Box px={4} pt={2} pb={10}>
+      <Group justify="space-between" wrap="nowrap" gap={8}>
+        <Group gap={10} wrap="nowrap" style={{ minWidth: 0 }}>
+          <Box pos="relative">
+            <Person name={col.title} size={32} />
+            <Box pos="absolute" right={-1} bottom={-1} w={11} h={11} style={{ borderRadius: 99, border: '2px solid var(--wt-surface)', background: col.onDuty ? '#10b981' : '#94a3b8' }} />
+          </Box>
           <Box style={{ minWidth: 0 }}>
-            <Text fw={700} size="sm" truncate>{col.title}</Text>
-            <Text size="xs" c="dimmed" truncate>
-              {col.driver ? (col.onDuty ? `On duty · ${col.onDuty.truck_name}` : 'Off duty') : `${count} waiting`}
-            </Text>
+            <Text fw={650} size="sm" truncate>{col.title}</Text>
+            <Text size="xs" c="dimmed" truncate>{col.onDuty ? `On duty · ${col.onDuty.truck_name}` : 'Off duty'}</Text>
           </Box>
         </Group>
-        {col.driver && <Text size="xs" c="dimmed" ta="right">{compactLitres(delivered)}<br />of {compactLitres(planned)}</Text>}
+        <Text size="xs" c="dimmed" className="wt-num" style={{ flex: 'none' }}>{done}/{col.jobs.length}</Text>
       </Group>
-      <Stack gap={8} mih={60}>
-        {children}
-        {count === 0 && (
-          <Text size="xs" c="dimmed" ta="center" py="md">
-            {col.driver ? 'Drag requests here to assign them.' : 'No waiting requests. Drag a job here to unassign it.'}
-          </Text>
-        )}
-      </Stack>
-    </Paper>
+      <Box className="wt-progress-track" mt={10} h={4}>
+        <Box className="wt-progress-fill" style={{ width: `${planned ? Math.min(100, (delivered / planned) * 100) : 0}%` }} />
+      </Box>
+      <Text size="xs" c="dimmed" mt={6} className="wt-num">{compactLitres(delivered)} of {compactLitres(planned)}</Text>
+    </Box>
   );
 }
+
+function BoardColumn({ col, children }: { col: Column; children: React.ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id: `col:${col.id}` });
+  return (
+    <div ref={setNodeRef} className="wt-column" data-over={isOver || undefined}>
+      <ColumnHeader col={col} />
+      <Stack gap={8} mih={60}>
+        {children}
+        {col.jobs.length === 0 && (
+          <div className="wt-drop-hint">{col.driver ? 'Drag requests here to assign' : 'Drop a job here to unassign it'}</div>
+        )}
+      </Stack>
+    </div>
+  );
+}
+
+type View = 'board' | 'split' | 'map';
 
 export default function Dispatch() {
   const navigate = useNavigate();
   const mobile = useIsMobile();
-  const wide = useMediaQuery('(min-width: 75em)', true, { getInitialValueInEffect: false });
+  const wide = useMediaQuery('(min-width: 80em)', true, { getInitialValueInEffect: false });
   const [date, setDate] = useState(todayIso());
   const [creating, setCreating] = useState(false);
-  const [view, setView] = useState<'list' | 'map'>('list');
+  const [phoneView, setPhoneView] = useState<'list' | 'map'>('list');
+  const [deskView, setDeskView] = useLocalStorage<View>({ key: 'wt.dispatchView', defaultValue: 'split' });
+  const view: View = !wide && deskView === 'split' ? 'board' : deskView;
   const [mobileCol, setMobileCol] = useState<string>(QUEUE);
   const [highlight, setHighlight] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -168,7 +143,7 @@ export default function Dispatch() {
     if (e.type === 'job') void invalidate('/jobs');
     if (e.type === 'shift' || e.type === 'position') void invalidate('/live/positions');
   });
-  useEffect(() => setConnected(live), [live]);
+  useEffect(() => { setConnected(live); }, [live]);
 
   // Server data, optionally overlaid with the order from a drag that is still saving.
   const columns = useMemo<Column[]>(() => {
@@ -201,8 +176,10 @@ export default function Dispatch() {
     done: driverCols.reduce((s, c) => s + c.jobs.filter((j) => j.status === 'completed').length, 0),
     count: driverCols.reduce((s, c) => s + c.jobs.length, 0),
     waiting: columns[0]?.jobs.length ?? 0,
+    urgent: allJobs.filter((j) => j.priority === 2 && j.status !== 'completed').length,
     onDuty: (positions.data ?? []).length,
   };
+  const loading = dayJobs.isLoading || queue.isLoading || drivers.isLoading;
 
   async function move(job: Job, toCol: string, index: number) {
     const target = columns.find((c) => c.id === toCol);
@@ -267,57 +244,39 @@ export default function Dispatch() {
   const dragged = dragId ? allJobs.find((j) => j.id === dragId) : null;
   const mapJobs = allJobs.filter((j) => j.scheduled_date === date || j.status === 'requested');
 
-  const header = (
-    <PageHeader
-      title="Dispatch"
-      subtitle={mobile ? undefined : longDay(date)}
-      actions={
-        <>
-          <DayPicker value={date} onChange={setDate} />
-          {!mobile && <Button leftSection={<IconPlus size={18} />} onClick={() => setCreating(true)}>New job</Button>}
-        </>
-      }
-    />
-  );
-
-  const stats = (
-    <SimpleGrid cols={{ base: 2, md: 4 }} spacing="sm" mb="md">
-      <StatCard label="Delivered" value={`${totals.done} / ${totals.count}`} hint="jobs today" icon={<IconCircleCheck size={20} />} color="teal" />
-      <StatCard label="Litres" value={compactLitres(totals.delivered)} hint={`of ${compactLitres(totals.planned)} planned`} icon={<IconDroplet size={20} />} />
-      <StatCard label="Requests" value={totals.waiting} hint="waiting to assign" icon={<IconInbox size={20} />} color="yellow" />
-      <StatCard
-        label="On duty"
-        value={totals.onDuty}
-        hint={<Group gap={4}><Box w={7} h={7} style={{ borderRadius: 9, background: connected ? 'var(--mantine-color-teal-6)' : 'var(--mantine-color-gray-5)' }} />{connected ? 'live' : 'updates every 15 s'}</Group>}
-        icon={<IconTruck size={20} />}
-        color="grape"
-      />
-    </SimpleGrid>
-  );
-
   const sheet = (
     <Sheet opened={creating} onClose={() => setCreating(false)} title="New delivery job">
       <JobForm defaultDate={date} onCancel={() => setCreating(false)} onSaved={() => setCreating(false)} />
     </Sheet>
   );
 
-  // ---------- Phone layout: one column at a time, actions in a menu ----------
+  const liveChip = (
+    <Tooltip label={connected ? 'Updates arrive the moment drivers act' : 'Refreshing every 15 seconds'}>
+      <Group gap={7} px={10} h={38} style={{ borderRadius: 10, border: '1px solid var(--wt-border-strong)', background: 'var(--wt-surface)' }}>
+        {connected ? <span className="wt-live-dot" /> : <Box w={8} h={8} style={{ borderRadius: 9, background: '#94a3b8' }} />}
+        <Text size="sm" fw={600}>{connected ? 'Live' : 'Polling'}</Text>
+      </Group>
+    </Tooltip>
+  );
+
+  // ---------- Phone: summary card, driver lanes, one list at a time ----------
   if (mobile) {
     const col = columns.find((c) => c.id === mobileCol) ?? columns[0];
     const moveMenu = (j: Job, i: number) => {
       const others = columns.filter((c) => c.id !== col.id && c.driver);
       const underway = ['en_route', 'arrived'].includes(j.status);
+      if (j.status === 'completed') return null;
       return (
-        <Menu position="bottom-end" withinPortal shadow="md" width={220}>
+        <Menu position="bottom-end" withinPortal width={230}>
           <Menu.Target>
-            <ActionIcon variant="subtle" color="gray" onClick={(e) => e.stopPropagation()} aria-label="Job actions"><IconDots size={18} /></ActionIcon>
+            <ActionIcon variant="subtle" color="gray" size={30} onClick={(e) => e.stopPropagation()} aria-label="Job actions"><IconDots size={18} /></ActionIcon>
           </Menu.Target>
           <Menu.Dropdown onClick={(e) => e.stopPropagation()}>
-            {j.status !== 'completed' && !underway && others.length > 0 && <Menu.Label>Assign to</Menu.Label>}
-            {j.status !== 'completed' && !underway && others.map((c) => (
-              <Menu.Item key={c.id} leftSection={<IconUserCheck size={16} />} onClick={() => void move(j, c.id, c.jobs.length)}>{c.title}</Menu.Item>
+            {!underway && others.length > 0 && <Menu.Label>Assign to</Menu.Label>}
+            {!underway && others.map((c) => (
+              <Menu.Item key={c.id} leftSection={<Person name={c.title} size={20} />} onClick={() => void move(j, c.id, c.jobs.length)}>{c.title}</Menu.Item>
             ))}
-            {col.driver && j.status !== 'completed' && (
+            {col.driver && (
               <>
                 <Menu.Divider />
                 <Menu.Item leftSection={<IconArrowUp size={16} />} disabled={i === 0} onClick={() => void move(j, col.id, i - 1)}>Move up</Menu.Item>
@@ -329,96 +288,175 @@ export default function Dispatch() {
         </Menu>
       );
     };
+    const pct = totals.planned ? totals.delivered / totals.planned : 0;
     return (
-      <Box p="md">
-        {header}
-        {view === 'list' && stats}
-        <SegmentedControl fullWidth mb="md" value={view} onChange={(v) => setView(v as 'list' | 'map')}
-          data={[
-            { value: 'list', label: <Group gap={6} justify="center"><IconList size={16} />List</Group> },
-            { value: 'map', label: <Group gap={6} justify="center"><IconMap size={16} />Map</Group> },
-          ]} />
-        {view === 'map' ? (
-          <JobMap jobs={mapJobs} positions={positions.data ?? []} onJobClick={(j) => navigate(`/jobs/${j.id}`)} height="calc(100dvh - 60px - env(safe-area-inset-top) - 76px - env(safe-area-inset-bottom) - 196px)" />
+      <Box>
+        <Group justify="space-between" align="flex-end" mb="md" wrap="nowrap">
+          <Box>
+            <Text className="wt-eyebrow">{longDay(date)}</Text>
+            <Text fz={28} fw={650} lh={1.15} style={{ letterSpacing: '-0.02em' }}>Dispatch</Text>
+          </Box>
+          <SegmentedControl size="xs" value={phoneView} onChange={(v) => setPhoneView(v as 'list' | 'map')}
+            data={[
+              { value: 'list', label: <Group gap={4} wrap="nowrap"><IconList size={14} />List</Group> },
+              { value: 'map', label: <Group gap={4} wrap="nowrap"><IconMap size={14} />Map</Group> },
+            ]} />
+        </Group>
+
+        <Box mb="md"><DayPicker value={date} onChange={setDate} /></Box>
+
+        {phoneView === 'list' && (
+          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
+            <div className="wt-hero">
+              <Group justify="space-between" align="flex-start" wrap="nowrap" style={{ position: 'relative', zIndex: 1 }}>
+                <Box>
+                  <Text size="sm" fw={500} c="rgb(255 255 255 / 0.8)">Delivered</Text>
+                  <Group gap={6} align="baseline">
+                    <Text fz={34} fw={650} lh={1.1} className="wt-num" style={{ letterSpacing: '-0.03em' }}>{compactLitres(totals.delivered)}</Text>
+                    <Text size="sm" c="rgb(255 255 255 / 0.75)" className="wt-num">of {compactLitres(totals.planned)}</Text>
+                  </Group>
+                </Box>
+                <Group gap={6} px={10} py={5} style={{ borderRadius: 99, background: 'rgb(255 255 255 / 0.16)' }}>
+                  {connected ? <span className="wt-live-dot" /> : null}
+                  <Text size="xs" fw={600}>{connected ? 'Live' : 'Updating'}</Text>
+                </Group>
+              </Group>
+              <Box className="wt-progress-track" mt={14} h={8} style={{ position: 'relative', zIndex: 1 }}>
+                <Box className="wt-progress-fill" style={{ width: `${Math.min(100, pct * 100)}%` }} />
+              </Box>
+              <SimpleGrid cols={3} mt={16} spacing={8} style={{ position: 'relative', zIndex: 1 }}>
+                <Box><div className="wt-hero-num">{totals.done}/{totals.count}</div><div className="wt-hero-stat">jobs done</div></Box>
+                <Box><div className="wt-hero-num">{totals.waiting}</div><div className="wt-hero-stat">to assign</div></Box>
+                <Box><div className="wt-hero-num">{totals.onDuty}</div><div className="wt-hero-stat">trucks out</div></Box>
+              </SimpleGrid>
+            </div>
+          </motion.div>
+        )}
+
+        {phoneView === 'map' ? (
+          <Box mt={4}>
+            <JobMap jobs={mapJobs} positions={positions.data ?? []} onJobClick={(j) => navigate(`/jobs/${j.id}`)}
+              height="calc(100dvh - var(--wt-topbar-h) - env(safe-area-inset-top) - var(--wt-tabbar-h) - env(safe-area-inset-bottom) - 190px)" />
+          </Box>
         ) : (
           <>
-            <ScrollArea type="never" mb="sm" mx={-16}>
-              <Group gap={8} wrap="nowrap" px={16}>
-                {columns.map((c) => (
-                  <Button key={c.id} size="compact-md" radius="xl" variant={c.id === col.id ? 'filled' : 'default'} onClick={() => setMobileCol(c.id)}
-                    rightSection={<Badge size="sm" circle variant={c.id === col.id ? 'white' : 'light'}>{c.jobs.length}</Badge>}>
-                    {c.driver ? c.title.split(' ')[0] : 'Requests'}
-                  </Button>
-                ))}
-              </Group>
-            </ScrollArea>
-            {col.driver && (
-              <Text size="sm" c="dimmed" mb="xs">
-                {col.onDuty ? `On duty in ${col.onDuty.truck_name}` : 'Off duty'} · {litres(col.jobs.reduce((s, j) => s + (j.delivered_litres ?? 0), 0))} of{' '}
-                {litres(col.jobs.reduce((s, j) => s + (j.requested_litres ?? 0), 0))}
-              </Text>
-            )}
-            <Stack gap={8}>
-              {col.jobs.map((j, i) => (
-                <JobCard key={j.id} job={j} inQueue={!col.driver} onOpen={() => navigate(`/jobs/${j.id}`)} actions={moveMenu(j, i)} />
+            <Text className="wt-section-title" mt="lg" mb={8}>Lanes</Text>
+            <div className="wt-lanes">
+              {columns.map((c) => (
+                <button key={c.id} className="wt-lane" data-active={c.id === col.id || undefined} onClick={() => setMobileCol(c.id)}>
+                  {c.driver ? <Person name={c.title} size={28} /> : (
+                    <Box w={28} h={28} style={{ borderRadius: 99, display: 'grid', placeItems: 'center', background: 'color-mix(in srgb, #f59e0b 18%, transparent)', color: '#d97706' }}><IconInbox size={15} /></Box>
+                  )}
+                  {c.driver ? c.title.split(' ')[0] : 'Requests'}
+                  <span className="wt-lane-count">{c.jobs.length}</span>
+                </button>
               ))}
-              {col.jobs.length === 0 && (
-                <EmptyState icon={<IconInbox size={24} />} title={col.driver ? 'Nothing assigned' : 'No waiting requests'}>
-                  {col.driver ? 'Open Requests and use the ⋯ menu to assign jobs.' : 'New requests show up here until they are assigned.'}
-                </EmptyState>
-              )}
-            </Stack>
+            </div>
+
+            {col.driver && (
+              <Group justify="space-between" mt="md" mb={8}>
+                <Text size="sm" c="dimmed">{col.onDuty ? `On duty in ${col.onDuty.truck_name}` : 'Off duty'}</Text>
+                <Text size="sm" c="dimmed" className="wt-num">
+                  {litres(col.jobs.reduce((s, j) => s + (j.delivered_litres ?? 0), 0))} / {litres(col.jobs.reduce((s, j) => s + (j.requested_litres ?? 0), 0))}
+                </Text>
+              </Group>
+            )}
+            {!col.driver && <Box mt="md" />}
+
+            {loading ? <ListSkeleton rows={4} height={96} /> : (
+              <Stack gap={8}>
+                <AnimatePresence initial={false}>
+                  {col.jobs.map((j, i) => (
+                    <motion.div key={j.id} layout initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: -24 }} transition={{ duration: 0.22, delay: Math.min(i, 8) * 0.025 }}>
+                      <JobCard job={j} onOpen={() => navigate(`/jobs/${j.id}`)} actions={moveMenu(j, i)} showDriver={false} showDate={!col.driver} />
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+                {col.jobs.length === 0 && (
+                  <EmptyState icon={col.driver ? <IconTruck size={26} /> : <IconCircleCheckFilled size={26} />} title={col.driver ? 'Nothing assigned yet' : 'All requests assigned'}>
+                    {col.driver ? 'Open Requests and use the ⋯ menu on a job to give it to this driver.' : 'New requests from the office or residents land here.'}
+                  </EmptyState>
+                )}
+              </Stack>
+            )}
           </>
         )}
-        <Affix position={{ bottom: 'calc(84px + env(safe-area-inset-bottom))', right: 16 }} zIndex={150}>
-          <Tooltip label="New job">
-            <ActionIcon size={56} radius="xl" variant="filled" onClick={() => setCreating(true)} aria-label="New job" style={{ boxShadow: 'var(--mantine-shadow-lg)' }}>
-              <IconPlus size={26} />
-            </ActionIcon>
-          </Tooltip>
-        </Affix>
+        <button className="wt-fab" onClick={() => setCreating(true)} aria-label="New job"><IconPlus size={22} stroke={2.4} />New job</button>
         {sheet}
       </Box>
     );
   }
 
   // ---------- Tablet and desktop: drag-and-drop board beside the live map ----------
+  const board = (
+    <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={onDragStart} onDragOver={onDragOver} onDragEnd={onDragEnd} onDragCancel={() => { setDragId(null); setOverCol(null); }}>
+      <ScrollArea type="auto" offsetScrollbars scrollbarSize={8}>
+        <Group gap={12} align="flex-start" wrap="nowrap" pb={8}>
+          {columns.map((c) => (
+            <BoardColumn key={c.id} col={c}>
+              <SortableContext items={c.jobs.map((j) => j.id)} strategy={verticalListSortingStrategy}>
+                {c.jobs.map((j) => (
+                  <SortableJob key={j.id} job={j} onOpen={() => navigate(`/jobs/${j.id}`)} onHover={setHighlight} highlight={highlight === j.id} />
+                ))}
+              </SortableContext>
+            </BoardColumn>
+          ))}
+          {drivers.data && driverCols.length === 0 && (
+            <EmptyState icon={<IconTruck size={26} />} title="No drivers yet" action={<Button variant="light" onClick={() => navigate('/fleet')}>Add drivers</Button>}>
+              Add your drivers under Fleet & people, then drag requests onto them.
+            </EmptyState>
+          )}
+        </Group>
+      </ScrollArea>
+      <DragOverlay dropAnimation={{ duration: 180, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' }}>
+        {dragged ? <JobCard job={dragged} overlay showDriver={false} /> : null}
+      </DragOverlay>
+    </DndContext>
+  );
+  const map = (h: string | number) => (
+    <JobMap jobs={mapJobs} positions={positions.data ?? []} highlight={highlight} onJobClick={(j) => navigate(`/jobs/${j.id}`)} height={h} />
+  );
+
   return (
-    <Box p={{ base: 'md', lg: 'lg' }}>
-      {header}
-      {stats}
-      <Box style={{ display: 'grid', gridTemplateColumns: wide ? 'minmax(0, 1fr) minmax(380px, 42%)' : '1fr', gap: 'var(--mantine-spacing-md)' }}>
-        <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={onDragStart} onDragOver={onDragOver} onDragEnd={onDragEnd} onDragCancel={() => { setDragId(null); setOverCol(null); }}>
-          <ScrollArea type="auto" offsetScrollbars>
-            <Group gap="sm" align="flex-start" wrap="nowrap" pb="xs">
-              {columns.map((c) => (
-                <BoardColumn key={c.id} col={c} count={c.jobs.length}>
-                  <SortableContext items={c.jobs.map((j) => j.id)} strategy={verticalListSortingStrategy}>
-                    {c.jobs.map((j) => (
-                      <SortableJob key={j.id} job={j} inQueue={!c.driver} onOpen={() => navigate(`/jobs/${j.id}`)} onHover={setHighlight} />
-                    ))}
-                  </SortableContext>
-                </BoardColumn>
-              ))}
-              {drivers.data && driverCols.length === 0 && (
-                <EmptyState icon={<IconTruck size={24} />} title="No drivers yet">Add drivers under Fleet.</EmptyState>
-              )}
-            </Group>
-          </ScrollArea>
-          <DragOverlay dropAnimation={{ duration: 160 }}>
-            {dragged ? <JobCard job={dragged} inQueue={false} overlay /> : null}
-          </DragOverlay>
-        </DndContext>
-        <Box style={wide ? { position: 'sticky', top: 'calc(76px + env(safe-area-inset-top))', alignSelf: 'start' } : undefined}>
-          <JobMap
-            jobs={mapJobs}
-            positions={positions.data ?? []}
-            highlight={highlight}
-            onJobClick={(j) => navigate(`/jobs/${j.id}`)}
-            height={wide ? 'calc(100dvh - 300px)' : 440}
-          />
+    <Box>
+      <PageHeader
+        eyebrow={longDay(date)}
+        title="Dispatch"
+        actions={
+          <>
+            {liveChip}
+            <DayPicker value={date} onChange={setDate} />
+            <SegmentedControl
+              value={view}
+              onChange={(v) => setDeskView(v as View)}
+              data={[
+                { value: 'board', label: <Tooltip label="Board"><Box><IconLayoutKanban size={17} /></Box></Tooltip> },
+                ...(wide ? [{ value: 'split', label: <Tooltip label="Board and map"><Box><IconLayoutColumns size={17} /></Box></Tooltip> }] : []),
+                { value: 'map', label: <Tooltip label="Map"><Box><IconMap size={17} /></Box></Tooltip> },
+              ]}
+              styles={{ root: { height: 38 }, label: { padding: '6px 10px' } }}
+            />
+            <Button leftSection={<IconPlus size={18} />} onClick={() => setCreating(true)} h={38}>New job</Button>
+          </>
+        }
+      />
+      <SimpleGrid cols={{ base: 2, lg: 4 }} spacing="md" mb="lg">
+        <StatCard label="Jobs delivered" value={<>{totals.done}<Text span c="dimmed" fz={18} fw={500}> / {totals.count}</Text></>} progress={totals.count ? totals.done / totals.count : 0} icon={<IconCircleCheck size={17} />} color="#10b981" />
+        <StatCard label="Litres delivered" value={compactLitres(totals.delivered)} progress={totals.planned ? totals.delivered / totals.planned : 0} hint={`of ${compactLitres(totals.planned)} planned`} icon={<IconDroplet size={17} />} />
+        <StatCard label="Waiting to assign" value={totals.waiting} hint={totals.urgent ? <Group gap={4} c="red.6"><IconAlertTriangle size={13} />{totals.urgent} out of water</Group> : 'Requests queue'} icon={<IconInbox size={17} />} color="#f59e0b" />
+        <StatCard label="Trucks on duty" value={totals.onDuty} hint={`${driverCols.length} drivers today`} icon={<IconTruck size={17} />} color="#8b5cf6" />
+      </SimpleGrid>
+
+      {loading ? (
+        <Group gap={12} align="flex-start" wrap="nowrap">{[0, 1, 2].map((i) => <Box key={i} w={296}><ListSkeleton rows={4 - i} height={104} /></Box>)}</Group>
+      ) : view === 'map' ? (
+        map('calc(100dvh - 300px)')
+      ) : view === 'split' ? (
+        <Box style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(420px, 40%)', gap: 16 }}>
+          <Box style={{ minWidth: 0 }}>{board}</Box>
+          <Box style={{ position: 'sticky', top: 24, alignSelf: 'start' }}>{map('calc(100dvh - 48px)')}</Box>
         </Box>
-      </Box>
+      ) : board}
       {sheet}
     </Box>
   );

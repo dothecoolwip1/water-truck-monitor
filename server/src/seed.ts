@@ -6,9 +6,11 @@ import { migrate } from './migrate.js';
 import { hashKey } from './routes/admin.js';
 import { config } from './config.js';
 import { bboxAround, downloadBuildings, storeBuildings, type Building } from './lib/osm.js';
+import { afterDelivery, generateInvoices } from './lib/billing.js';
+import { getSettings, updateSettings } from './lib/settings.js';
 
 // Bump to replace an older demo data set (only demo data, never real records).
-const DEMO_VERSION = 3;
+const DEMO_VERSION = 4;
 const DEMO_CENTRE = { lat: 66.2565, lng: -128.6335 };
 const DEMO_EMAILS = ['dispatch@example.com', 'sam@example.com', 'lee@example.com', 'jo@example.com'];
 
@@ -99,6 +101,7 @@ export async function seed(pool: pg.Pool, opts: { demo: boolean; adminEmail: str
       );
     }
     await demoHistory(c, { drivers, trucks, sites });
+    await demoBusiness(c, { drivers, trucks, today });
     await setMeta(c, 'demo_version', DEMO_VERSION);
     await setMeta(c, 'demo_real', buildings.length >= 30);
     await setMeta(c, 'demo_buildings_tried', Date.now());
@@ -134,7 +137,8 @@ async function isOnlyDemoData(c: pg.PoolClient): Promise<boolean> {
 }
 
 async function clearDemoData(c: pg.PoolClient) {
-  await c.query(`truncate deliveries, fills, gps_points, tank_readings, shifts, jobs, files, sites, customers, trucks, source_tanks, audit_log cascade`);
+  await c.query(`truncate deliveries, fills, gps_points, tank_readings, shifts, jobs, files, sites, customers, trucks, source_tanks, audit_log,
+    invoices, recurring_jobs, notifications, job_comments, job_followers, job_reads, job_lines cascade`);
   await c.query('delete from users where email = any($1)', [DEMO_EMAILS]);
 }
 
@@ -301,6 +305,102 @@ async function demoHistory(
     `insert into tank_readings (tank_id, ts, volume_l) select $1, (r->>0)::timestamptz, (r->>1)::numeric from jsonb_array_elements($2::jsonb) r`,
     [tank, JSON.stringify(readings)],
   );
+}
+
+/** Price book, approvals, invoices, chat, a recurring run and a resident request, so every screen has something in it. */
+async function demoBusiness(c: pg.PoolClient, d: { drivers: string[]; trucks: string[]; today: string }) {
+  const current = await getSettings(c);
+  if (!current.company.address) {
+    await updateSettings(c, {
+      company: { name: 'Fort Good Hope Water Delivery', address: 'Fort Good Hope, NT X0E 0H0', phone: '(867) 598-2000', email: 'water@example.com', tax_number: '' },
+      form: {
+        fields: [
+          { key: 'tank_condition', label: 'Tank condition', type: 'choice', options: ['Good', 'Needs cleaning', 'Damaged'] },
+          { key: 'cap_locked', label: 'Fill cap closed and locked', type: 'yesno', required: true },
+        ],
+      },
+    });
+  }
+  const items: [string, string, string, number, string, boolean][] = [
+    ['WATER', 'Potable water', 'litre', 0.045, 'water', false],
+    ['DELIVERY', 'Delivery fee', 'load', 25, 'delivery', false],
+    ['AFTERHOURS', 'After-hours call-out', 'each', 85, 'other', false],
+    ['TANKCLEAN', 'Tank cleaning', 'each', 150, 'other', false],
+  ];
+  for (const [code, name, unit, price, kind, auto] of items) {
+    await c.query(
+      `insert into price_items (code, name, unit, unit_price, kind, auto_add) values ($1,$2,$3,$4,$5,$6) on conflict (code) do nothing`,
+      [code, name, unit, price, kind, auto],
+    );
+  }
+  // Facilities have a negotiated water rate.
+  await c.query(
+    `insert into customer_rates (customer_id, price_item_id, unit_price)
+     select cu.id, p.id, 0.038 from customers cu, price_items p
+     where p.code = 'WATER' and cu.account_code like 'FGH-%' and cu.name not like 'Residence%' on conflict do nothing`,
+  );
+  // Phone numbers on file, so the resident page can be tried (account FGH-001 with phone 867-598-1001, and so on).
+  await c.query(`update customers set phone = '(867) 598-1' || right(account_code, 3) where account_code like 'FGH-%' and phone is null`);
+
+  // Price and approve history. A few recent deliveries have meter readings that don't add up and wait for review.
+  const { rows: done } = await c.query(`select j.id, j.completed_at from jobs j where j.status = 'completed' order by j.completed_at`);
+  const recent = done.slice(-40).filter((_, i) => i % 9 === 4).map((r) => r.id);
+  if (recent.length) await c.query('update deliveries set meter_end = meter_end + 320 where job_id = any($1::uuid[])', [recent]);
+  for (const j of done) await afterDelivery(c, j.id);
+
+  // Bill the first week; mark some sent and paid.
+  const weekStart = (await c.query(`select ($1::date - 14)::text as a, ($1::date - 8)::text as b`, [d.today])).rows[0];
+  const admin = (await c.query(`select id from users where role = 'admin' order by created_at limit 1`)).rows[0]?.id ?? d.drivers[0];
+  const ids = await generateInvoices(c, { from: weekStart.a, to: weekStart.b, userId: admin });
+  for (const [i, id] of ids.entries()) {
+    if (i % 3 === 0) await c.query(`update invoices set status = 'paid', sent_at = now() - interval '6 days', paid_at = now() - interval '2 days' where id = $1`, [id]);
+    else if (i % 3 === 1) await c.query(`update invoices set status = 'sent', sent_at = now() - interval '6 days' where id = $1`, [id]);
+  }
+
+  // A resident asked online this morning; it's waiting in Requests.
+  const req = (await c.query(`select j.id, s.label from jobs j join sites s on s.id = j.site_id where j.scheduled_date = $1 and j.driver_id is null order by j.number limit 1`, [d.today])).rows[0];
+  if (req) {
+    await c.query(
+      `update jobs set source = 'portal', requester_name = 'Mary', requester_phone = '(867) 598-1016', priority = 2, notes = 'Tank ran dry overnight',
+         track_token = $2 where id = $1`,
+      [req.id, crypto.randomBytes(12).toString('base64url')],
+    );
+    await c.query(
+      `insert into notifications (user_id, kind, title, body, job_id) select u.id, 'request', $2, 'Mary asked for a fill (online request)', $1
+       from users u where u.role in ('admin', 'dispatcher')`,
+      [req.id, `Out of water: ${req.label}`],
+    );
+  }
+
+  // A short conversation on one of today's jobs.
+  const dispatcher = (await c.query(`select id from users where email = 'dispatch@example.com'`)).rows[0].id;
+  const chatJob = (await c.query(`select id, driver_id from jobs where scheduled_date = $1 and driver_id is not null order by sort_order, number limit 1`, [d.today])).rows[0];
+  if (chatJob) {
+    const base = Date.now() - 50 * 60_000;
+    const msgs: [string, string][] = [
+      [dispatcher, 'Dog in the yard here. Use the side gate and the fill pipe is behind the shed.'],
+      [chatJob.driver_id, 'Got it, I\'ll go there first.'],
+      [dispatcher, 'Thanks! They also asked for a receipt left in the mailbox.'],
+    ];
+    for (const [k, [author, body]] of msgs.entries()) {
+      await c.query('insert into job_comments (job_id, author_id, body, created_at) values ($1,$2,$3,$4)', [chatJob.id, author, body, new Date(base + k * 6 * 60_000)]);
+    }
+    await c.query('insert into job_followers (job_id, user_id) values ($1,$2),($1,$3) on conflict do nothing', [chatJob.id, dispatcher, chatJob.driver_id]);
+    await c.query('insert into job_reads (job_id, user_id, read_at) values ($1,$2,now()),($1,$3,now()) on conflict do nothing', [chatJob.id, dispatcher, chatJob.driver_id]);
+  }
+
+  // Facilities on a standing run: Monday and Thursday.
+  const fac = (await c.query(
+    `select cu.id as customer_id, s.id as site_id from customers cu join sites s on s.customer_id = cu.id
+     where cu.account_code like 'FGH-%' and cu.name not like 'Residence%' order by cu.account_code limit 2`,
+  )).rows;
+  for (const [i, f] of fac.entries()) {
+    await c.query(
+      `insert into recurring_jobs (customer_id, site_id, requested_litres, weekdays, start_date, driver_id, truck_id, notes, created_by)
+       values ($1,$2,9000,'{1,4}',$3,$4,$5,'Standing order',$6)`,
+      [f.customer_id, f.site_id, d.today, d.drivers[i % d.drivers.length], d.trucks[i % d.trucks.length], admin],
+    );
+  }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

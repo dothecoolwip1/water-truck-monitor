@@ -8,7 +8,7 @@ import { loadServer } from './config';
 import { startTracking, stopTracking, updateGeofences } from './location';
 import { registerForPush } from './notifications';
 import * as queue from './queue';
-import type { Job, Op, PhotoRef, Problem, Shift, Today, User } from './types';
+import type { FormValue, Job, Op, PhotoRef, Problem, Shift, Today, User } from './types';
 
 const USER_KEY = 'wt.user';
 const TODAY_KEY = 'wt.today';
@@ -24,6 +24,7 @@ export interface CompleteInput {
   signature: PhotoRef | null;
   lat: number | null;
   lng: number | null;
+  form_data?: Record<string, FormValue> | null;
 }
 
 interface Store {
@@ -52,6 +53,7 @@ interface Store {
   finishFill(litres: number | null, tankId: string | null): Promise<void>;
   cancelFill(): Promise<void>;
   clearProblems(): Promise<void>;
+  sendComment(jobId: string, body: string): Promise<void>;
 }
 
 const Ctx = createContext<Store | null>(null);
@@ -237,6 +239,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       await queue.clearProblems();
       await readQueue();
     },
+    sendComment: (jobId, body) => act({ type: 'comment', at: new Date().toISOString(), job_id: jobId, body }),
   };
 
   return <Ctx.Provider value={store}>{children}</Ctx.Provider>;

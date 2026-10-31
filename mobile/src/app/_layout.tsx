@@ -25,6 +25,7 @@ export default function RootLayout() {
           <Stack.Screen name="shift" options={{ title: 'Shift' }} />
           <Stack.Screen name="job/[id]" options={{ title: 'Job' }} />
           <Stack.Screen name="complete/[id]" options={{ title: 'Record delivery' }} />
+          <Stack.Screen name="chat/[id]" options={{ title: 'Messages' }} />
           <Stack.Screen name="fill" options={{ title: 'Fill the truck' }} />
           <Stack.Screen name="settings" options={{ title: 'Sync & settings' }} />
         </Stack>

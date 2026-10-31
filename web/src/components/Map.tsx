@@ -6,7 +6,8 @@ import { ActionIcon, Box, SegmentedControl, Text, Tooltip, useComputedColorSchem
 import { IconFocusCentered, IconTruck } from '@tabler/icons-react';
 import type { Job, LivePosition } from '../api';
 import { useApi } from '../hooks';
-import { STATUS_HEX, STATUS_LABEL, ago, litres } from '../format';
+import { STATUS_HEX, ago, litres } from '../format';
+import StatusBadge from './StatusBadge';
 
 const [defLat, defLng] = (import.meta.env.VITE_MAP_CENTER ?? '66.2565,-128.6335').split(',').map(Number);
 export const DEFAULT_CENTER = { lat: defLat, lng: defLng };
@@ -30,7 +31,7 @@ function readBasemap(): Basemap {
   }
 }
 
-function makeStyle(base: Basemap): StyleSpecification {
+export function makeStyle(base: Basemap): StyleSpecification {
   return {
     version: 8,
     sources: {
@@ -112,7 +113,7 @@ function JobPin({ job, active, compact }: { job: Job; active: boolean; compact: 
   if (compact && !active) return <div className={`wt-dot${job.priority === 2 ? ' urgent' : ''}`} style={{ ['--pin' as string]: color }} />;
   return (
     <div className={`wt-pin${active ? ' active' : ''}${job.priority === 2 ? ' urgent' : ''}`} style={{ ['--pin' as string]: color }}>
-      <span>{job.number}</span>
+      {job.number ? <span>{job.number}</span> : <span className="wt-pin-label">{job.site_label}</span>}
     </div>
   );
 }
@@ -120,7 +121,7 @@ function JobPin({ job, active, compact }: { job: Job; active: boolean; compact: 
 function TruckPin({ p }: { p: LivePosition }) {
   return (
     <div className="wt-truck">
-      <IconTruck size={16} stroke={2.2} />
+      <span className="wt-truck-icon"><IconTruck size={14} stroke={2.4} /></span>
       <span>{p.truck_name}</span>
     </div>
   );
@@ -224,7 +225,7 @@ export default function JobMap({
   const outline = basemap === 'satellite' ? '#ffffff' : scheme === 'dark' ? '#5c5f66' : '#868e96';
 
   return (
-    <Box pos="relative" h={height} w="100%" style={{ borderRadius: radius, overflow: 'hidden', isolation: 'isolate' }}>
+    <Box pos="relative" h={height} w="100%" className="wt-map" style={{ borderRadius: radius, overflow: 'hidden', isolation: 'isolate', border: '1px solid var(--wt-border)' }}>
       <MapGL
         ref={mapRef}
         initialViewState={{ longitude: DEFAULT_CENTER.lng, latitude: DEFAULT_CENTER.lat, zoom: 14.5 }}
@@ -292,13 +293,12 @@ export default function JobMap({
         {popup && onJobClick && (
           <Popup longitude={popup.site_lng!} latitude={popup.site_lat!} anchor="top" offset={8} onClose={() => setPopup(null)} closeButton={false} maxWidth="260px">
             <Box p={4} onClick={() => onJobClick(popup)} style={{ cursor: 'pointer' }}>
-              <Text fw={700} size="sm">#{popup.number} {popup.site_label}</Text>
+              <Text className="wt-chip-num">#{popup.number}</Text>
+              <Text fw={650} size="sm" mt={2}>{popup.site_label}</Text>
               <Text size="xs" c="dimmed">{popup.site_address}</Text>
-              <Text size="xs" mt={4}>
-                <span style={{ color: STATUS_HEX[popup.status], fontWeight: 700 }}>{STATUS_LABEL[popup.status]}</span> · {popup.driver_name ?? 'unassigned'} ·{' '}
-                {litres(popup.delivered_litres ?? popup.requested_litres)}
-              </Text>
-              <Text size="xs" c="water" fw={600} mt={6}>Open job →</Text>
+              <Box mt={8}><StatusBadge status={popup.status} /></Box>
+              <Text size="xs" c="dimmed" mt={6}>{popup.driver_name ?? 'Unassigned'} · {litres(popup.delivered_litres ?? popup.requested_litres)}</Text>
+              <Text size="xs" c="water" fw={650} mt={8}>Open job →</Text>
             </Box>
           </Popup>
         )}
@@ -311,10 +311,11 @@ export default function JobMap({
           value={basemap}
           onChange={changeBasemap}
           data={[{ value: 'satellite', label: 'Satellite' }, { value: 'streets', label: 'Streets' }]}
-          className="wt-map-control"
+          className="wt-map-glass"
+          styles={{ indicator: { boxShadow: 'var(--mantine-shadow-sm)' } }}
         />
         <Tooltip label="Show everything">
-          <ActionIcon variant="default" radius="xl" size="md" onClick={() => fitAll()} aria-label="Show everything" className="wt-map-control">
+          <ActionIcon variant="default" radius="xl" size={30} onClick={() => fitAll()} aria-label="Show everything" className="wt-map-glass">
             <IconFocusCentered size={16} />
           </ActionIcon>
         </Tooltip>
