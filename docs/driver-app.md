@@ -13,7 +13,7 @@ The driver app lives in `mobile/`. It is an Expo (React Native) app, built in th
 
 ## Settings to fill in
 
-- `mobile/eas.json`: the server address (`EXPO_PUBLIC_API_URL`, in `preview` and `production`) points at the test site, https://water-truck-metering.vercel.app; change it to the live server before launch, and `ascAppId` with the App Store Connect app id once the app record exists.
+- `mobile/eas.json`: the server address (`EXPO_PUBLIC_API_URL`, in `preview` and `production`) points at the test site, https://water-truck-metering.vercel.app; change it to the live server before launch. Replace `ascAppId` with the App Store Connect app id once the app record exists.
 - Bundle id: defaults to `ca.fortgoodhope.waterdelivery`. Change it with `APP_BUNDLE_ID` before the first store upload; it cannot change afterwards.
 - App name: `APP_NAME` (defaults to "Water Delivery").
 
