@@ -44,7 +44,7 @@ async function overpass(query: string): Promise<OverpassElement[]> {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded', 'user-agent': 'water-truck-metering/1.0' },
         body: `data=${encodeURIComponent(query)}`,
-        signal: AbortSignal.timeout(25_000),
+        signal: AbortSignal.timeout(12_000),
       });
       if (!res.ok) throw new Error(`Overpass ${res.status}`);
       const json = (await res.json()) as { elements: OverpassElement[] };
@@ -54,6 +54,51 @@ async function overpass(query: string): Promise<OverpassElement[]> {
     }
   }
   throw lastErr ?? new Error('No Overpass endpoint configured');
+}
+
+const unescapeXml = (v: string) =>
+  v.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&amp;/g, '&');
+
+/** Parses the main OpenStreetMap API's XML into the same shape Overpass returns with `out geom`. */
+export function parseOsmXml(xml: string): OverpassElement[] {
+  const nodes = new Map<string, { lat: number; lon: number }>();
+  for (const m of xml.matchAll(/<node\b([^>]*?)\/?>/g)) {
+    const id = /\bid="(-?\d+)"/.exec(m[1])?.[1];
+    const lat = /\blat="([-\d.]+)"/.exec(m[1])?.[1];
+    const lon = /\blon="([-\d.]+)"/.exec(m[1])?.[1];
+    if (id && lat && lon) nodes.set(id, { lat: Number(lat), lon: Number(lon) });
+  }
+  const out: OverpassElement[] = [];
+  for (const m of xml.matchAll(/<way\b([^>]*)>([\s\S]*?)<\/way>/g)) {
+    const id = Number(/\bid="(\d+)"/.exec(m[1])?.[1]);
+    const tags: Record<string, string> = {};
+    for (const t of m[2].matchAll(/<tag k="([^"]*)" v="([^"]*)"\s*\/>/g)) tags[unescapeXml(t[1])] = unescapeXml(t[2]);
+    if (!tags.building && !(tags.highway && tags.name)) continue;
+    const geometry = [...m[2].matchAll(/<nd ref="(\d+)"/g)].map((r) => nodes.get(r[1])).filter((g): g is { lat: number; lon: number } => !!g);
+    out.push({ type: 'way', id, tags, geometry });
+  }
+  return out;
+}
+
+async function osmApi(b: Bbox): Promise<OverpassElement[]> {
+  const url = `${process.env.OSM_API_URL ?? 'https://api.openstreetmap.org/api/0.6/map'}?bbox=${b.west},${b.south},${b.east},${b.north}`;
+  const res = await fetch(url, { headers: { 'user-agent': 'water-truck-metering/1.0' }, signal: AbortSignal.timeout(25_000) });
+  if (!res.ok) throw new Error(`OpenStreetMap API ${res.status}`);
+  return parseOsmXml(await res.text());
+}
+
+/** Buildings and named streets in a box: Overpass first, the main OpenStreetMap API if Overpass is slow or down. */
+async function fetchElements(b: Bbox): Promise<OverpassElement[]> {
+  const box = `(${b.south},${b.west},${b.north},${b.east})`;
+  try {
+    return await overpass(`[out:json][timeout:20];(way["building"]${box};way["highway"]["name"]${box};);out geom tags;`);
+  } catch (err) {
+    try {
+      return await osmApi(b);
+    } catch (err2) {
+      throw new Error(`${(err as Error).message}; ${(err2 as Error).message}`);
+    }
+  }
 }
 
 function centroid(ring: [number, number][]): [number, number] {
@@ -89,8 +134,7 @@ function distToSegmentM(lat: number, lng: number, a: { lat: number; lon: number 
 
 /** Downloads building outlines (and street names, to describe houses without an address) for a box. */
 export async function downloadBuildings(b: Bbox): Promise<Building[]> {
-  const box = `(${b.south},${b.west},${b.north},${b.east})`;
-  const elements = await overpass(`[out:json][timeout:25];(way["building"]${box};way["highway"]["name"]${box};);out geom tags;`);
+  const elements = await fetchElements(b);
   const streets = elements
     .filter((e) => e.tags?.highway && e.tags.name && e.geometry?.length)
     .map((e) => ({ name: e.tags!.name, pts: e.geometry! }));

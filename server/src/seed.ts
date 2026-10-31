@@ -8,7 +8,7 @@ import { config } from './config.js';
 import { bboxAround, downloadBuildings, storeBuildings, type Building } from './lib/osm.js';
 
 // Bump to replace an older demo data set (only demo data, never real records).
-const DEMO_VERSION = 2;
+const DEMO_VERSION = 3;
 const DEMO_CENTRE = { lat: 66.2565, lng: -128.6335 };
 const DEMO_EMAILS = ['dispatch@example.com', 'sam@example.com', 'lee@example.com', 'jo@example.com'];
 
@@ -21,13 +21,15 @@ export async function seed(pool: pg.Pool, opts: { demo: boolean; adminEmail: str
   // Real building outlines for the demo, fetched before the transaction so a slow
   // download doesn't hold locks. Without them the demo falls back to a made-up layout.
   let buildings: Building[] = [];
-  if (opts.demo && !(await demoIsCurrent(pool))) {
+  const meta = opts.demo ? await demoMeta(pool) : null;
+  const needBuildings = meta && (meta.version !== DEMO_VERSION || (!meta.real && Date.now() - meta.triedAt > 10 * 60_000));
+  if (needBuildings) {
     const box = bboxAround(DEMO_CENTRE.lat, DEMO_CENTRE.lng, 1800);
     try {
       buildings = await downloadBuildings(box);
       await storeBuildings(pool, box, buildings);
     } catch (err) {
-      console.warn(`Demo: building outlines unavailable (${(err as Error).message}); using a made-up layout`);
+      console.warn(`Demo: building outlines unavailable (${(err as Error).message}); using a made-up layout for now`);
     }
   }
   return tx(pool, async (c) => {
@@ -43,7 +45,16 @@ export async function seed(pool: pg.Pool, opts: { demo: boolean; adminEmail: str
       out.admin = opts.adminEmail;
     }
     if (!opts.demo) return out;
-    if (await demoIsCurrent(c)) {
+    const m = await demoMeta(c);
+    if (m.version === DEMO_VERSION) {
+      // An earlier start couldn't reach OpenStreetMap: move the demo customers onto real houses now, keeping everything else.
+      if (!m.real && needBuildings) {
+        const moved = buildings.length >= 30 ? await relayoutDemo(c, buildings) : false;
+        await setMeta(c, 'demo_real', moved);
+        await setMeta(c, 'demo_buildings_tried', Date.now());
+        out.demo = moved ? 'moved onto real buildings' : 'current; real buildings still unavailable';
+        return out;
+      }
       out.demo = 'skipped, demo data is current';
       return out;
     }
@@ -88,19 +99,26 @@ export async function seed(pool: pg.Pool, opts: { demo: boolean; adminEmail: str
       );
     }
     await demoHistory(c, { drivers, trucks, sites });
-    await c.query(
-      `insert into app_meta (key, value) values ('demo_version', $1) on conflict (key) do update set value = excluded.value, updated_at = now()`,
-      [JSON.stringify(DEMO_VERSION)],
-    );
+    await setMeta(c, 'demo_version', DEMO_VERSION);
+    await setMeta(c, 'demo_real', buildings.length >= 30);
+    await setMeta(c, 'demo_buildings_tried', Date.now());
     out.demo = { drivers: ['sam@example.com', 'lee@example.com', 'jo@example.com'], driver_password: 'driver123',
       dispatcher: 'dispatch@example.com / dispatch123', real_buildings: buildings.length > 0 };
     return out;
   });
 }
 
-async function demoIsCurrent(c: pg.Pool | pg.PoolClient): Promise<boolean> {
-  const r = await c.query(`select value from app_meta where key = 'demo_version'`);
-  return Number(r.rows[0]?.value) === DEMO_VERSION;
+async function demoMeta(c: pg.Pool | pg.PoolClient) {
+  const { rows } = await c.query(`select key, value from app_meta where key in ('demo_version', 'demo_real', 'demo_buildings_tried')`);
+  const v = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+  return { version: Number(v.demo_version ?? 0), real: v.demo_real === true, triedAt: Number(v.demo_buildings_tried ?? 0) };
+}
+
+async function setMeta(c: pg.PoolClient, key: string, value: unknown) {
+  await c.query(
+    `insert into app_meta (key, value) values ($1, $2) on conflict (key) do update set value = excluded.value, updated_at = now()`,
+    [key, JSON.stringify(value)],
+  );
 }
 
 /** True when every customer and truck came from a demo seed, so replacing them loses nothing real. */
@@ -140,8 +158,9 @@ function tankSpot(buildings: Building[]): [number, number] {
  * OpenStreetMap names and residences sit on actual houses; otherwise points are
  * spread around the community centre.
  */
-async function demoSites(c: pg.PoolClient, buildings: Building[]) {
-  type Spot = { name: string; label: string; address: string; lat: number; lng: number; house: boolean };
+type Spot = { name: string; label: string; address: string; lat: number; lng: number; house: boolean };
+
+function demoSpots(buildings: Building[]): Spot[] {
   const spots: Spot[] = [];
   const town = 'Fort Good Hope, NT';
   if (buildings.length >= 30) {
@@ -181,7 +200,29 @@ async function demoSites(c: pg.PoolClient, buildings: Building[]) {
     }
   }
   // Facilities first so today's jobs mix big and small deliveries the same way either way.
-  spots.sort((a, b) => Number(a.house) - Number(b.house));
+  return spots.sort((a, b) => Number(a.house) - Number(b.house));
+}
+
+/** Moves existing demo customers onto real buildings, in place, so jobs and history stay attached. */
+async function relayoutDemo(c: pg.PoolClient, buildings: Building[]): Promise<boolean> {
+  const spots = demoSpots(buildings);
+  const { rows } = await c.query(
+    `select cu.id as customer_id, s.id as site_id from customers cu join sites s on s.customer_id = cu.id
+     where cu.account_code like 'FGH-%' order by cu.account_code`,
+  );
+  if (rows.length !== spots.length) return false;
+  for (const [i, r] of rows.entries()) {
+    const sp = spots[i];
+    await c.query('update customers set name = $2 where id = $1', [r.customer_id, sp.name]);
+    await c.query('update sites set label = $2, address = $3, lat = $4, lng = $5 where id = $1', [r.site_id, sp.label, sp.address, sp.lat, sp.lng]);
+  }
+  const [lat, lng] = tankSpot(buildings);
+  await c.query(`update source_tanks set lat = $1, lng = $2 where device_id = 'armor-001'`, [lat, lng]);
+  return true;
+}
+
+async function demoSites(c: pg.PoolClient, buildings: Building[]) {
+  const spots = demoSpots(buildings);
   const sites = [];
   for (const [i, sp] of spots.entries()) {
     const cust = (await c.query('insert into customers (name, account_code) values ($1,$2) returning id', [sp.name, `FGH-${String(i + 1).padStart(3, '0')}`])).rows[0].id;
