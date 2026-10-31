@@ -16,9 +16,20 @@ export const DEFAULT_CENTER = { lat: defLat, lng: defLng };
 setWorkerUrl(workerUrl);
 
 // Satellite imagery shows the actual houses; the street map is the fallback for poor imagery or low bandwidth.
-const SATELLITE_URL = import.meta.env.VITE_SATELLITE_URL ?? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
-const LABELS_URL = import.meta.env.VITE_LABELS_URL ?? 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}';
-const STREETS_URL = import.meta.env.VITE_STREETS_URL ?? 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+// For production use a licensed key: an ArcGIS Location Platform key (free up to 2M tiles a month) or a MapTiler key.
+// Without one, the public Esri tiles are used, which is fine for testing only.
+const ESRI_KEY = import.meta.env.VITE_ESRI_KEY as string | undefined;
+const MAPTILER_KEY = import.meta.env.VITE_MAPTILER_KEY as string | undefined;
+const SATELLITE_URL = import.meta.env.VITE_SATELLITE_URL
+  ?? (MAPTILER_KEY ? `https://api.maptiler.com/tiles/satellite-v2/{z}/{x}/{y}.jpg?key=${MAPTILER_KEY}`
+    : ESRI_KEY ? `https://ibasemaps-api.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}?token=${ESRI_KEY}`
+      : 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}');
+const LABELS_URL = import.meta.env.VITE_LABELS_URL
+  ?? (ESRI_KEY ? `https://ibasemaps-api.arcgis.com/arcgis/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}?token=${ESRI_KEY}`
+    : 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}');
+const STREETS_URL = import.meta.env.VITE_STREETS_URL
+  ?? (MAPTILER_KEY ? `https://api.maptiler.com/maps/streets-v2/256/{z}/{x}/{y}.png?key=${MAPTILER_KEY}` : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png');
+const IMAGERY_CREDIT = MAPTILER_KEY ? '© MapTiler © OpenStreetMap contributors' : 'Imagery © Esri, Maxar, Earthstar Geographics';
 
 type Basemap = 'satellite' | 'streets';
 const BASEMAP_KEY = 'wt.basemap';
@@ -35,7 +46,7 @@ export function makeStyle(base: Basemap): StyleSpecification {
   return {
     version: 8,
     sources: {
-      satellite: { type: 'raster', tiles: [SATELLITE_URL], tileSize: 256, maxzoom: 19, attribution: 'Imagery © Esri, Maxar, Earthstar Geographics' },
+      satellite: { type: 'raster', tiles: [SATELLITE_URL], tileSize: MAPTILER_KEY && !import.meta.env.VITE_SATELLITE_URL ? 512 : 256, maxzoom: 19, attribution: IMAGERY_CREDIT },
       labels: { type: 'raster', tiles: [LABELS_URL], tileSize: 256, maxzoom: 19 },
       streets: { type: 'raster', tiles: [STREETS_URL], tileSize: 256, maxzoom: 19, attribution: '© OpenStreetMap contributors' },
     },

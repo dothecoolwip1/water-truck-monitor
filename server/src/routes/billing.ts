@@ -34,8 +34,30 @@ const lineFields = z.object({
 const routes: FastifyPluginAsync = async (app) => {
   // ----- Price book -----
   app.get('/price-items', { preHandler: office }, async () => {
-    const { rows } = await app.pool.query('select * from price_items order by active desc, kind, name');
+    const { rows } = await app.pool.query(
+      `select p.*, coalesce((select jsonb_object_agg(cr.customer_class, cr.unit_price) from class_rates cr where cr.price_item_id = p.id), '{}') as class_rates
+       from price_items p order by active desc, kind, name`,
+    );
     return rows;
+  });
+  // Rates by customer class (e.g. public housing pays one rate, businesses another).
+  app.put('/price-items/:id/class-rates', { preHandler: adminOnly }, async (req) => {
+    const id = parse(uuid, (req.params as { id: string }).id);
+    const b = parse(z.object({ rates: z.record(z.string().regex(/^[a-z0-9_]{1,40}$/), money.nullable()) }), req.body);
+    await tx(app.pool, async (c) => {
+      for (const [cls, price] of Object.entries(b.rates)) {
+        if (price === null) await c.query('delete from class_rates where customer_class = $1 and price_item_id = $2', [cls, id]);
+        else {
+          await c.query(
+            `insert into class_rates (customer_class, price_item_id, unit_price) values ($1,$2,$3)
+             on conflict (customer_class, price_item_id) do update set unit_price = excluded.unit_price`,
+            [cls, id, price],
+          );
+        }
+      }
+      await audit(c, 'price_item', id, 'class_rates_changed', req.user.id, b.rates);
+    });
+    return { ok: true };
   });
   app.post('/price-items', { preHandler: adminOnly }, async (req, reply) => {
     const b = parse(itemFields, req.body);

@@ -1,7 +1,7 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
 import { File } from 'expo-file-system';
 import { api, ApiError, hasToken } from './api';
+import { db } from './db';
 import type { GpsPoint, Op, PhotoRef, Problem } from './types';
 
 /**
@@ -10,9 +10,6 @@ import type { GpsPoint, Op, PhotoRef, Problem } from './types';
  * it twice (after a dropped connection) is harmless.
  */
 
-const QUEUE_KEY = 'wt.queue';
-const GPS_KEY = 'wt.gps';
-const PROBLEMS_KEY = 'wt.problems';
 // Some hosts cap request bodies at 4.5 MB.
 const MAX_BATCH_BYTES = 3_500_000;
 
@@ -23,15 +20,8 @@ function withLock<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-async function read<T>(key: string, fallback: T): Promise<T> {
-  try {
-    const raw = await AsyncStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as T) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-const write = (key: string, value: unknown) => AsyncStorage.setItem(key, JSON.stringify(value));
+const MAX_GPS = 20_000;
+const MAX_PROBLEMS = 50;
 
 type Listener = () => void;
 const listeners = new Set<Listener>();
@@ -49,9 +39,7 @@ type NewOp = Op extends infer O ? (O extends Op ? Omit<O, 'client_id'> : never) 
 export async function enqueue(op: NewOp): Promise<Op> {
   const full = { ...op, client_id: newId() } as Op;
   await withLock(async () => {
-    const q = await read<Op[]>(QUEUE_KEY, []);
-    q.push(full);
-    await write(QUEUE_KEY, q);
+    await (await db()).runAsync('insert or ignore into ops (client_id, body) values (?, ?)', full.client_id, JSON.stringify(full));
   });
   notify();
   void flush();
@@ -62,27 +50,31 @@ export async function enqueue(op: NewOp): Promise<Op> {
 export async function addGpsPoints(points: GpsPoint[]): Promise<void> {
   if (points.length === 0) return;
   await withLock(async () => {
-    const buf = await read<GpsPoint[]>(GPS_KEY, []);
-    buf.push(...points);
-    // Keep at most ~3 days of points if the phone never gets signal.
-    await write(GPS_KEY, buf.slice(-20_000));
+    const d = await db();
+    await d.withExclusiveTransactionAsync(async (t) => {
+      for (const p of points) await t.runAsync('insert into gps (body) values (?)', JSON.stringify(p));
+      // Keep at most ~3 days of points if the phone never gets signal.
+      await t.runAsync('delete from gps where seq <= (select max(seq) from gps) - ?', MAX_GPS);
+    });
   });
 }
 
 export async function pending(): Promise<Op[]> {
-  return read<Op[]>(QUEUE_KEY, []);
+  const rows = await (await db()).getAllAsync<{ body: string }>('select body from ops order by seq');
+  return rows.map((r) => JSON.parse(r.body) as Op);
 }
 
 export async function pendingGpsCount(): Promise<number> {
-  return (await read<GpsPoint[]>(GPS_KEY, [])).length;
+  return (await (await db()).getFirstAsync<{ n: number }>('select count(*) as n from gps'))?.n ?? 0;
 }
 
 export async function problems(): Promise<Problem[]> {
-  return read<Problem[]>(PROBLEMS_KEY, []);
+  const rows = await (await db()).getAllAsync<{ body: string }>('select body from problems order by seq');
+  return rows.map((r) => JSON.parse(r.body) as Problem);
 }
 
 export async function clearProblems(): Promise<void> {
-  await write(PROBLEMS_KEY, []);
+  await (await db()).runAsync('delete from problems');
   notify();
 }
 
@@ -136,12 +128,17 @@ async function doFlush(): Promise<FlushResult> {
 
   // Fold buffered GPS points into the queue as batches.
   await withLock(async () => {
-    const buf = await read<GpsPoint[]>(GPS_KEY, []);
-    if (buf.length === 0) return;
-    const q = await read<Op[]>(QUEUE_KEY, []);
-    for (let i = 0; i < buf.length; i += 1000) q.push({ type: 'gps', client_id: newId(), points: buf.slice(i, i + 1000) });
-    await write(QUEUE_KEY, q);
-    await write(GPS_KEY, []);
+    const d = await db();
+    await d.withExclusiveTransactionAsync(async (t) => {
+      const rows = await t.getAllAsync<{ seq: number; body: string }>('select seq, body from gps order by seq');
+      if (rows.length === 0) return;
+      const buf = rows.map((r) => JSON.parse(r.body) as GpsPoint);
+      for (let i = 0; i < buf.length; i += 1000) {
+        const op: Op = { type: 'gps', client_id: newId(), points: buf.slice(i, i + 1000) };
+        await t.runAsync('insert into ops (client_id, body) values (?, ?)', op.client_id, JSON.stringify(op));
+      }
+      await t.runAsync('delete from gps where seq <= ?', rows[rows.length - 1].seq);
+    });
   });
 
   let sent = 0;
@@ -185,10 +182,20 @@ async function doFlush(): Promise<FlushResult> {
       }
     }
     await withLock(async () => {
-      const current = await read<Op[]>(QUEUE_KEY, []);
-      for (const op of current) if (done.has(op.client_id)) deletePhotos(op);
-      await write(QUEUE_KEY, current.filter((o) => !done.has(o.client_id)));
-      if (newProblems.length) await write(PROBLEMS_KEY, [...(await read<Problem[]>(PROBLEMS_KEY, [])), ...newProblems].slice(-50));
+      const d = await db();
+      await d.withExclusiveTransactionAsync(async (t) => {
+        for (const op of batch) {
+          if (done.has(op.client_id)) await t.runAsync('delete from ops where client_id = ?', op.client_id);
+          else {
+            const r = results.find((x) => x.client_id === op.client_id);
+            await t.runAsync('update ops set attempts = attempts + 1, last_error = ? where client_id = ?', r?.error ?? null, op.client_id);
+          }
+        }
+        for (const pr of newProblems) await t.runAsync('insert into problems (body) values (?)', JSON.stringify(pr));
+        await t.runAsync('delete from problems where seq <= (select max(seq) from problems) - ?', MAX_PROBLEMS);
+      });
+      // Files go only after the rows that point at them are gone.
+      for (const op of batch) if (done.has(op.client_id)) deletePhotos(op);
     });
     sent += done.size;
     notify();
@@ -200,8 +207,8 @@ async function doFlush(): Promise<FlushResult> {
 /** Drops everything not yet sent. Only used when signing out with nothing pending. */
 export async function resetLocal(): Promise<void> {
   await withLock(async () => {
-    for (const op of await read<Op[]>(QUEUE_KEY, [])) deletePhotos(op);
-    await AsyncStorage.multiRemove([QUEUE_KEY, GPS_KEY, PROBLEMS_KEY]);
+    for (const op of await pending()) deletePhotos(op);
+    await (await db()).execAsync('delete from ops; delete from gps; delete from problems;');
   });
   notify();
 }

@@ -8,7 +8,7 @@ import { loadServer } from './config';
 import { startTracking, stopTracking, updateGeofences } from './location';
 import { registerForPush } from './notifications';
 import * as queue from './queue';
-import type { FormValue, Job, Op, PhotoRef, Problem, Shift, Today, User } from './types';
+import type { FormValue, InspectionItem, Job, Op, PhotoRef, Problem, Shift, Today, User } from './types';
 
 const USER_KEY = 'wt.user';
 const TODAY_KEY = 'wt.today';
@@ -54,7 +54,10 @@ interface Store {
   cancelFill(): Promise<void>;
   clearProblems(): Promise<void>;
   sendComment(jobId: string, body: string): Promise<void>;
+  inspect(truckId: string, input: InspectionInput): Promise<void>;
 }
+
+export interface InspectionInput { items: InspectionItem[]; odometer_km: number | null; engine_hours: number | null; notes: string | null }
 
 const Ctx = createContext<Store | null>(null);
 
@@ -240,6 +243,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       await readQueue();
     },
     sendComment: (jobId, body) => act({ type: 'comment', at: new Date().toISOString(), job_id: jobId, body }),
+    inspect: (truckId, input) => act({ type: 'inspection', at: new Date().toISOString(), truck_id: truckId, ...input }),
   };
 
   return <Ctx.Provider value={store}>{children}</Ctx.Provider>;

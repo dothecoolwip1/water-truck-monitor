@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import type { LiveEvent } from '../lib/events.js';
+import { LIVE_CHANNEL, type LiveEvent } from '../lib/events.js';
 import { HttpError, office } from '../http.js';
 
 const routes: FastifyPluginAsync = async (app) => {
@@ -17,6 +17,13 @@ const routes: FastifyPluginAsync = async (app) => {
        where s.ended_at is null order by u.name`,
     );
     return rows;
+  });
+
+  // How this browser should get live events: Ably (serverless) or our own stream.
+  app.get('/live/config', { preHandler: office }, async (req) => {
+    if (!app.bus.relayed) return { mode: process.env.LIVE_STREAM === 'off' ? 'poll' : 'sse' };
+    const token = (await app.bus.token(req.user.id)) as { token: string; expires: number };
+    return { mode: 'ably', channel: LIVE_CHANNEL, token: token.token, expires: token.expires };
   });
 
   // Server-sent events so dispatch screens update without refreshing. EventSource

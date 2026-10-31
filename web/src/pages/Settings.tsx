@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   ActionIcon, Alert, Box, Button, CopyButton, Group, Image, NumberInput, Select, SimpleGrid, Stack, Switch, Tabs, TagsInput, Text, TextInput, Textarea, Tooltip,
 } from '@mantine/core';
-import { IconArrowDown, IconArrowUp, IconBuilding, IconCheck, IconClipboardCheck, IconCopy, IconExternalLink, IconPlus, IconReceiptTax, IconShieldCheck, IconTrash, IconWorld } from '@tabler/icons-react';
+import { IconBell, IconCategory, IconMapPin, IconPlugConnected, IconTruckDelivery, IconArrowDown, IconArrowUp, IconBuilding, IconCheck, IconClipboardCheck, IconCopy, IconExternalLink, IconPlus, IconReceiptTax, IconShieldCheck, IconTrash, IconWorld } from '@tabler/icons-react';
 import QRCode from 'qrcode';
 import { patch, type FormField, type Settings as S } from '../api';
 import { PageHeader, Section } from '../components/ui';
+import { AlertsPanel, ClassesPanel, InspectionPanel, OperationsPanel, QuickBooksPanel } from '../components/SettingsExtra';
 import { notifyError, notifyOk, useApi, useInvalidate } from '../hooks';
 
 function useDraft() {
@@ -98,11 +100,23 @@ export default function Settings() {
   const { saved, draft, setDraft } = useDraft();
   const invalidate = useInvalidate();
   const [busy, setBusy] = useState(false);
+  const [params, setParams] = useSearchParams();
+  const tab = params.get('tab') ?? 'company';
+  const qbo = params.get('qbo');
+  useEffect(() => {
+    if (!qbo) return;
+    if (qbo === 'connected') notifyOk('QuickBooks is connected');
+    else notifyError(new Error(qbo === 'cancelled' ? 'The connection was cancelled.' : qbo === 'expired' ? 'The sign-in took too long. Try again.' : 'QuickBooks did not accept the connection. Try again.'), "QuickBooks isn't connected");
+    void invalidate('/integrations', '/settings');
+    setParams({ tab: 'integrations' }, { replace: true });
+  }, [qbo]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!draft || !saved) return null;
   const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
   const up = <K extends keyof S>(k: K, p: Partial<S[K]>) => setDraft({ ...draft, [k]: { ...draft[k], ...p } });
 
   async function save() {
+    if (draft!.inspection.items.some((x) => !x.trim())) return notifyError(new Error('Remove or fill in the empty inspection item'), "Can't save yet");
+    if (draft!.classes.some((c) => !c.label.trim())) return notifyError(new Error('Every customer class needs a name'), "Can't save yet");
     const bad = draft!.form.fields.find((f) => !f.label.trim() || (f.type === 'choice' && !(f.options ?? []).length));
     if (bad) return notifyError(new Error(bad.label ? `Add choices for “${bad.label}”` : 'Every question needs a label'), "Can't save yet");
     setBusy(true);
@@ -119,14 +133,21 @@ export default function Settings() {
 
   return (
     <Box maw={980}>
-      <PageHeader title="Settings" subtitle="Company details, billing, automatic approvals, the resident page and the driver's checklist." />
-      <Tabs defaultValue="company" keepMounted>
-        <Tabs.List mb="lg" style={{ flexWrap: 'nowrap', overflowX: 'auto' }}>
+      <PageHeader title="Settings" subtitle="Company details, billing, approvals, resident alerts, truck inspections and connected apps." />
+      <Tabs value={tab} onChange={(v) => setParams({ tab: v ?? 'company' }, { replace: true })} keepMounted>
+        <Select hiddenFrom="sm" mb="lg" size="md" allowDeselect={false} value={tab} onChange={(v) => setParams({ tab: v ?? 'company' }, { replace: true })}
+          data={[{ value: 'company', label: 'Company' }, { value: 'billing', label: 'Billing' }, { value: 'approvals', label: 'Approvals' }, { value: 'portal', label: 'Resident page' }, { value: 'form', label: 'Driver checklist' }, { value: 'alerts', label: 'Alerts' }, { value: 'inspection', label: 'Inspection' }, { value: 'operations', label: 'Routes' }, { value: 'classes', label: 'Classes' }, { value: 'integrations', label: 'QuickBooks' }]} />
+        <Tabs.List mb="lg" visibleFrom="sm" style={{ flexWrap: 'wrap' }}>
           <Tabs.Tab value="company" leftSection={<IconBuilding size={16} />}>Company</Tabs.Tab>
           <Tabs.Tab value="billing" leftSection={<IconReceiptTax size={16} />}>Billing</Tabs.Tab>
           <Tabs.Tab value="approvals" leftSection={<IconShieldCheck size={16} />}>Approvals</Tabs.Tab>
           <Tabs.Tab value="portal" leftSection={<IconWorld size={16} />}>Resident page</Tabs.Tab>
           <Tabs.Tab value="form" leftSection={<IconClipboardCheck size={16} />}>Driver checklist</Tabs.Tab>
+          <Tabs.Tab value="alerts" leftSection={<IconBell size={16} />}>Alerts</Tabs.Tab>
+          <Tabs.Tab value="inspection" leftSection={<IconTruckDelivery size={16} />}>Inspection</Tabs.Tab>
+          <Tabs.Tab value="operations" leftSection={<IconMapPin size={16} />}>Routes</Tabs.Tab>
+          <Tabs.Tab value="classes" leftSection={<IconCategory size={16} />}>Classes</Tabs.Tab>
+          <Tabs.Tab value="integrations" leftSection={<IconPlugConnected size={16} />}>QuickBooks</Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="company">
@@ -197,6 +218,12 @@ export default function Settings() {
             <FieldEditor fields={draft.form.fields} onChange={(fields) => setDraft({ ...draft, form: { fields } })} />
           </Section>
         </Tabs.Panel>
+
+        <Tabs.Panel value="alerts"><AlertsPanel draft={draft} up={up} /></Tabs.Panel>
+        <Tabs.Panel value="inspection"><InspectionPanel draft={draft} up={up} /></Tabs.Panel>
+        <Tabs.Panel value="operations"><OperationsPanel draft={draft} up={up} /></Tabs.Panel>
+        <Tabs.Panel value="classes"><ClassesPanel draft={draft} onChange={(classes) => setDraft({ ...draft, classes })} /></Tabs.Panel>
+        <Tabs.Panel value="integrations"><QuickBooksPanel /></Tabs.Panel>
       </Tabs>
       <SaveBar dirty={dirty} busy={busy} onSave={() => void save()} onReset={() => setDraft(structuredClone(saved))} />
     </Box>

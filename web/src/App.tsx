@@ -6,7 +6,7 @@ import { Spotlight, spotlight, type SpotlightActionData } from '@mantine/spotlig
 import { motion } from 'motion/react';
 import {
   IconChartBar, IconClipboardList, IconDeviceDesktop, IconDots, IconLayoutKanban, IconLogout, IconMoon, IconReceipt2, IconSearch,
-  IconSettings, IconSun, IconTruck, IconUsers, IconChevronRight, IconUser, IconHash,
+  IconSettings, IconSun, IconDroplet, IconTruck, IconUsers, IconChevronRight, IconUser, IconHash,
 } from '@tabler/icons-react';
 import { useAuth } from './auth';
 import Brand from './components/Brand';
@@ -26,6 +26,7 @@ const Fleet = lazy(() => import('./pages/Fleet'));
 const Reports = lazy(() => import('./pages/Reports'));
 const Billing = lazy(() => import('./pages/Billing'));
 const Settings = lazy(() => import('./pages/Settings'));
+const Forecast = lazy(() => import('./pages/Forecast'));
 const RequestPage = lazy(() => import('./pages/Resident').then((m) => ({ default: m.RequestPage })));
 const TrackPage = lazy(() => import('./pages/Resident').then((m) => ({ default: m.TrackPage })));
 
@@ -34,6 +35,7 @@ const NAV: NavItem[] = [
   { to: '/', label: 'Dispatch', icon: IconLayoutKanban, group: 'Operations' },
   { to: '/jobs', label: 'Jobs', icon: IconClipboardList, group: 'Operations' },
   { to: '/customers', label: 'Customers', icon: IconUsers, group: 'Operations' },
+  { to: '/forecast', label: 'Running low', icon: IconDroplet, group: 'Operations' },
   { to: '/billing', label: 'Billing', icon: IconReceipt2, group: 'Money' },
   { to: '/reports', label: 'Reports', icon: IconChartBar, group: 'Money' },
   { to: '/fleet', label: 'Fleet & people', icon: IconTruck, group: 'Setup' },
@@ -214,6 +216,7 @@ export default function App() {
       <Route path="/jobs/:id" element={<JobDetailPage />} />
       <Route path="/customers" element={<Customers />} />
       <Route path="/customers/:id" element={<Customers />} />
+      <Route path="/forecast" element={<Forecast />} />
       <Route path="/fleet" element={<Fleet />} />
       <Route path="/reports" element={<Reports />} />
       <Route path="/billing" element={<Billing />} />

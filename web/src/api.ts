@@ -19,6 +19,10 @@ export interface Truck {
   meter_serial: string | null;
   last_meter_reading: number | null;
   active: boolean;
+  odometer_km?: number | string | null;
+  engine_hours?: number | string | null;
+  out_of_service?: boolean;
+  out_of_service_reason?: string | null;
 }
 
 export interface Customer {
@@ -29,6 +33,9 @@ export interface Customer {
   email: string | null;
   notes: string | null;
   active: boolean;
+  customer_class?: string;
+  notify_sms?: boolean;
+  notify_email?: boolean;
 }
 
 export interface Site {
@@ -43,6 +50,7 @@ export interface Site {
   access_notes: string | null;
   tags: string[];
   active: boolean;
+  critical?: boolean;
 }
 
 export interface Tank {
@@ -122,6 +130,7 @@ export interface PriceItem {
   auto_add: boolean;
   taxable: boolean;
   active: boolean;
+  class_rates?: Record<string, string | number>;
 }
 
 export interface JobLine {
@@ -153,6 +162,8 @@ export interface Invoice {
   created_at: string;
   sent_at: string | null;
   paid_at: string | null;
+  qbo_id?: string | null;
+  qbo_synced_at?: string | null;
   job_count?: number;
   lines?: (JobLine & { job_number: number; completed_at: string; site_label: string; item_code: string | null })[];
 }
@@ -213,6 +224,12 @@ export interface Settings {
   approvals: { auto: boolean; meter_tolerance_l: number; require_at_site: boolean; max_over_tank_pct: number };
   portal: { enabled: boolean; max_litres: number; message: string };
   form: { fields: FormField[] };
+  inspection: { required: boolean; items: string[] };
+  alerts: { sms: boolean; email: boolean; on_scheduled: boolean; on_en_route: boolean; on_completed: boolean };
+  classes: { key: string; label: string }[];
+  depot: { lat: number | null; lng: number | null; label: string };
+  forecast: { warn_days: number };
+  quickbooks: { connected: boolean; realm_id: string | null; connected_at: string | null; company_name: string | null };
 }
 
 export interface BillingSummary {
@@ -323,3 +340,34 @@ export function authedUrl(path: string): string {
   const sep = path.includes('?') ? '&' : '?';
   return `/api${path}${sep}token=${encodeURIComponent(getToken() ?? '')}`;
 }
+
+export type DueState = 'overdue' | 'due_soon' | 'ok' | 'unknown';
+export interface MaintenanceTask {
+  id: string; truck_id: string; name: string; every_km: number | null; every_hours: number | null; every_days: number | null;
+  last_done_at: string | null; last_done_km: string | null; last_done_hours: string | null; notes: string | null; active: boolean;
+  due: { state: DueState; label: string; next_km: number | null; next_hours: number | null; next_date: string | null };
+}
+export interface Inspection {
+  id: string; truck_id: string; truck_name?: string; driver_name: string | null; at: string; odometer_km: string | null; engine_hours: string | null;
+  items: { label: string; ok: boolean; note?: string | null }[]; defects: number; safe: boolean; notes: string | null;
+}
+export interface FleetTruck {
+  id: string; name: string; plate: string | null; capacity_l: number; odometer_km: string | null; engine_hours: string | null;
+  out_of_service: boolean; out_of_service_reason: string | null; active: boolean;
+  last_inspection: Inspection | null; tasks: MaintenanceTask[]; overdue: number; due_soon: number;
+}
+export interface MaintenanceEntry {
+  id: string; truck_id: string; truck_name: string; task_id: string | null; title: string; done_at: string; odometer_km: string | null;
+  engine_hours: string | null; cost: string | null; notes: string | null; created_by_name: string | null;
+}
+export interface SiteForecast {
+  site_id: string; site_label: string; site_address: string | null; customer_id: string; customer_name: string; critical: boolean;
+  tank_capacity_l: number | null; deliveries: number; last_delivery_at: string | null; litres_per_day: number | null; level_l: number | null;
+  level_pct: number | null; days_left: number | null; empty_on: string | null; state: 'empty' | 'low' | 'ok' | 'unknown';
+  open_job: { id: string; number: number; status: JobStatus; scheduled_date: string | null } | null;
+}
+export interface OutboundMessage {
+  id: string; customer_id: string | null; customer_name: string | null; job_id: string | null; job_number: number | null; channel: 'sms' | 'email';
+  recipient: string; subject: string | null; body: string; status: 'queued' | 'sent' | 'failed' | 'skipped'; error: string | null; kind: string | null; created_at: string;
+}
+export interface QuickBooksStatus { configured: boolean; connected: boolean; company_name: string | null; connected_at: string | null; redirect_uri: string; environment: string }

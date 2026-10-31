@@ -9,7 +9,7 @@ import {
   IconAlertTriangle, IconCheck, IconChevronDown, IconCircleCheck, IconClockHour4, IconDownload, IconFileInvoice, IconFileTypePdf, IconPlus,
   IconReceipt2, IconSend, IconCash, IconX, IconTag,
 } from '@tabler/icons-react';
-import { authedUrl, patch, post, type BillingSummary, type Customer, type Invoice, type Job, type PriceItem } from '../api';
+import { authedUrl, patch, post, put, type BillingSummary, type Customer, type Invoice, type Job, type PriceItem, type QuickBooksStatus, type Settings } from '../api';
 import { EmptyState, ListSkeleton, PageHeader, Sheet, StatCard, useIsMobile } from '../components/ui';
 import { notifyError, notifyOk, useApi, useInvalidate } from '../hooks';
 import { addDays, day, litres, money, todayIso } from '../format';
@@ -161,6 +161,20 @@ function InvoiceDrawer({ id, onClose }: { id: string | null; onClose: () => void
   const inv = useApi<Invoice>(id ? `/invoices/${id}` : null);
   const invalidate = useInvalidate();
   const i = inv.data;
+  const qbo = useApi<QuickBooksStatus>('/integrations/quickbooks');
+  const [pushing, setPushing] = useState(false);
+  async function toQuickBooks() {
+    setPushing(true);
+    try {
+      await post(`/invoices/${id}/quickbooks`);
+      await invalidate('/invoices');
+      notifyOk(`Invoice #${i?.number} is in QuickBooks`);
+    } catch (e) {
+      notifyError(e, "Couldn't send to QuickBooks");
+    } finally {
+      setPushing(false);
+    }
+  }
   async function setStatus(status: Invoice['status']) {
     const go = async () => {
       try {
@@ -206,6 +220,11 @@ function InvoiceDrawer({ id, onClose }: { id: string | null; onClose: () => void
             <Button component="a" href={authedUrl(`/invoices/${i.id}/pdf`)} target="_blank" variant="default" leftSection={<IconFileTypePdf size={16} />} size="sm">PDF</Button>
             {i.status === 'draft' && <Button size="sm" leftSection={<IconSend size={16} />} onClick={() => void setStatus('sent')}>Mark sent</Button>}
             {i.status === 'sent' && <Button size="sm" color="teal" leftSection={<IconCash size={16} />} onClick={() => void setStatus('paid')}>Mark paid</Button>}
+            {i.qbo_id ? (
+              <Badge size="lg" variant="light" color="green" leftSection={<IconCheck size={13} />} style={{ alignSelf: 'center' }}>In QuickBooks</Badge>
+            ) : qbo.data?.connected && i.status !== 'void' ? (
+              <Button size="sm" variant="light" color="green" loading={pushing} onClick={() => void toQuickBooks()}>Send to QuickBooks</Button>
+            ) : null}
             <Menu position="bottom-end">
               <Menu.Target><Button size="sm" variant="default" rightSection={<IconChevronDown size={14} />}>More</Button></Menu.Target>
               <Menu.Dropdown>
@@ -278,13 +297,19 @@ export function PriceBook() {
   const items = useApi<PriceItem[]>('/price-items');
   const invalidate = useInvalidate();
   const [editing, setEditing] = useState<Partial<PriceItem> | null>(null);
+  const settings = useApi<Settings>('/settings');
+  const classes = settings.data?.classes ?? [];
   const admin = user?.role === 'admin';
   async function save() {
     if (!editing) return;
     try {
       const body = { code: editing.code, name: editing.name, unit: editing.unit || 'each', unit_price: Number(editing.unit_price) || 0, kind: editing.kind ?? 'other', auto_add: !!editing.auto_add, taxable: editing.taxable ?? true, active: editing.active ?? true };
-      if (editing.id) await patch(`/price-items/${editing.id}`, body);
-      else await post('/price-items', body);
+      const saved = editing.id ? await patch<PriceItem>(`/price-items/${editing.id}`, body) : await post<PriceItem>('/price-items', body);
+      const rates = Object.fromEntries(classes.map((c) => {
+        const v = editing.class_rates?.[c.key];
+        return [c.key, v === undefined || v === '' ? null : Number(v)];
+      }));
+      if (classes.length) await put(`/price-items/${saved.id ?? editing.id}/class-rates`, { rates });
       await invalidate('/price-items');
       setEditing(null);
     } catch (e) {
@@ -308,6 +333,11 @@ export function PriceBook() {
                 <Text className="wt-chip-num">{it.code}</Text>
                 <Text fw={600} truncate>{it.name}</Text>
                 <Text size="xs" c="dimmed">{KIND[it.kind]}{it.auto_add ? ' · added to every delivery' : ''}{it.taxable ? '' : ' · tax exempt'}</Text>
+                {Object.keys(it.class_rates ?? {}).length > 0 && (
+                  <Text size="xs" c="water" mt={2}>
+                    {Object.entries(it.class_rates!).map(([k, v]) => `${classes.find((c) => c.key === k)?.label ?? k} ${Number(v) < 1 ? `$${Number(v).toFixed(4)}` : money(Number(v))}`).join(' · ')}
+                  </Text>
+                )}
               </Box>
               <Box ta="right" style={{ flex: 'none' }}>
                 <Text fw={650} className="wt-num">{Number(it.unit_price) < 1 ? `$${Number(it.unit_price).toFixed(4)}` : money(Number(it.unit_price))}</Text>
@@ -330,6 +360,19 @@ export function PriceBook() {
             <Select label="How it's charged" value={editing.kind} onChange={(v) => setEditing({ ...editing, kind: (v as PriceItem['kind']) ?? 'other' })}
               data={[{ value: 'water', label: 'Per litre delivered' }, { value: 'delivery', label: 'Once per delivery' }, { value: 'other', label: 'Added by hand' }]} />
             {editing.kind === 'other' && <Switch label="Add to every delivery automatically" checked={!!editing.auto_add} onChange={(e) => setEditing({ ...editing, auto_add: e.currentTarget.checked })} />}
+            {classes.length > 0 && (
+              <Box>
+                <Text size="sm" fw={500}>Price by customer class</Text>
+                <Text size="xs" c="dimmed" mb={6}>Leave blank to use the price above. A rate set on a single customer still wins.</Text>
+                <SimpleGrid cols={2} spacing="xs">
+                  {classes.map((c) => (
+                    <NumberInput key={c.key} size="sm" label={c.label} prefix="$" decimalScale={4} min={0} placeholder="Same as above"
+                      value={editing.class_rates?.[c.key] ?? ''}
+                      onChange={(v) => setEditing({ ...editing, class_rates: { ...(editing.class_rates ?? {}), [c.key]: v as string | number } })} />
+                  ))}
+                </SimpleGrid>
+              </Box>
+            )}
             <Switch label="Taxable" checked={editing.taxable ?? true} onChange={(e) => setEditing({ ...editing, taxable: e.currentTarget.checked })} />
             {editing.id && <Switch label="Active" checked={editing.active ?? true} onChange={(e) => setEditing({ ...editing, active: e.currentTarget.checked })} />}
             <Group justify="flex-end"><Button variant="default" onClick={() => setEditing(null)}>Cancel</Button><Button onClick={() => void save()}>Save</Button></Group>

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ActionIcon, Box, Button, Group, Menu, ScrollArea, SegmentedControl, SimpleGrid, Stack, Text, Tooltip } from '@mantine/core';
 import { useLocalStorage, useMediaQuery } from '@mantine/hooks';
+import { modals } from '@mantine/modals';
 import {
   DndContext, DragOverlay, KeyboardSensor, PointerSensor, TouchSensor, closestCorners, useDroppable, useSensor, useSensors,
   type DragEndEvent, type DragOverEvent, type DragStartEvent,
@@ -11,7 +12,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   IconArrowDown, IconArrowUp, IconCircleCheck, IconCircleCheckFilled, IconDots, IconDroplet, IconGripVertical, IconInbox, IconLayoutColumns,
-  IconLayoutKanban, IconList, IconMap, IconPlus, IconTruck, IconAlertTriangle,
+  IconLayoutKanban, IconList, IconMap, IconPlus, IconTruck, IconAlertTriangle, IconRoute,
 } from '@tabler/icons-react';
 import { post, type Job, type LivePosition, type User } from '../api';
 import JobCard from '../components/JobCard';
@@ -19,7 +20,7 @@ import JobForm from '../components/JobForm';
 import JobMap from '../components/Map';
 import { DayPicker, EmptyState, ListSkeleton, PageHeader, Person, Sheet, StatCard } from '../components/ui';
 import { useIsMobile } from '../components/ui';
-import { notifyError, useApi, useInvalidate, useLive } from '../hooks';
+import { notifyError, notifyOk, useApi, useInvalidate, useLive } from '../hooks';
 import { compactLitres, litres, longDay, todayIso } from '../format';
 
 const QUEUE = '__queue__';
@@ -60,7 +61,56 @@ function SortableJob({ job, onOpen, onHover, highlight }: { job: Job; onOpen: ()
   );
 }
 
-function ColumnHeader({ col }: { col: Column }) {
+interface Optimized { job_ids: string[]; before_km: number; after_km: number; changed: boolean; depot: { label: string } | null }
+
+/** Works out the shortest order for a driver's stops, shows the saving, and applies it on confirm. */
+function BestOrder({ col, date }: { col: Column; date: string }) {
+  const invalidate = useInvalidate();
+  const [busy, setBusy] = useState(false);
+  const open = col.jobs.filter((j) => j.status === 'scheduled').length;
+  if (!col.driver || open < 2) return null;
+  async function run() {
+    setBusy(true);
+    try {
+      const r = await post<Optimized>('/dispatch/optimize', { driver_id: col.driver!.id, scheduled_date: date });
+      if (!r.changed) {
+        notifyOk(`${col.title}'s stops are already in the shortest order (about ${r.after_km} km).`);
+        return;
+      }
+      const saved = Math.max(0, r.before_km - r.after_km);
+      modals.openConfirmModal({
+        title: `Best order for ${col.title}`,
+        children: (
+          <Stack gap={6}>
+            <Text size="sm">Driving drops from about <b>{r.before_km} km</b> to <b>{r.after_km} km</b>, saving roughly {saved.toFixed(1)} km.</Text>
+            <Text size="sm" c="dimmed">Urgent stops stay first and jobs already under way keep their place. Starting from {r.depot?.label || 'the fill station'}.</Text>
+          </Stack>
+        ),
+        labels: { confirm: 'Use this order', cancel: 'Keep mine' },
+        onConfirm: async () => {
+          try {
+            await post('/jobs/reorder', { scheduled_date: date, driver_id: col.driver!.id, job_ids: r.job_ids });
+            await invalidate('/jobs');
+            notifyOk(`Stops reordered for ${col.title}`);
+          } catch (e) {
+            notifyError(e);
+          }
+        },
+      });
+    } catch (e) {
+      notifyError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Tooltip label="Put stops in the shortest driving order">
+      <ActionIcon variant="subtle" color="gray" size={28} loading={busy} onClick={() => void run()} aria-label="Best stop order"><IconRoute size={16} /></ActionIcon>
+    </Tooltip>
+  );
+}
+
+function ColumnHeader({ col, date }: { col: Column; date: string }) {
   const planned = col.jobs.reduce((s, j) => s + (j.requested_litres ?? 0), 0);
   const delivered = col.jobs.reduce((s, j) => s + (j.delivered_litres ?? 0), 0);
   const done = col.jobs.filter((j) => j.status === 'completed').length;
@@ -90,7 +140,10 @@ function ColumnHeader({ col }: { col: Column }) {
             <Text size="xs" c="dimmed" truncate>{col.onDuty ? `On duty · ${col.onDuty.truck_name}` : 'Off duty'}</Text>
           </Box>
         </Group>
-        <Text size="xs" c="dimmed" className="wt-num" style={{ flex: 'none' }}>{done}/{col.jobs.length}</Text>
+        <Group gap={2} wrap="nowrap" style={{ flex: 'none' }}>
+          <BestOrder col={col} date={date} />
+          <Text size="xs" c="dimmed" className="wt-num">{done}/{col.jobs.length}</Text>
+        </Group>
       </Group>
       <Box className="wt-progress-track" mt={10} h={4}>
         <Box className="wt-progress-fill" style={{ width: `${planned ? Math.min(100, (delivered / planned) * 100) : 0}%` }} />
@@ -100,11 +153,11 @@ function ColumnHeader({ col }: { col: Column }) {
   );
 }
 
-function BoardColumn({ col, children }: { col: Column; children: React.ReactNode }) {
+function BoardColumn({ col, date, children }: { col: Column; date: string; children: React.ReactNode }) {
   const { setNodeRef, isOver } = useDroppable({ id: `col:${col.id}` });
   return (
     <div ref={setNodeRef} className="wt-column" data-over={isOver || undefined}>
-      <ColumnHeader col={col} />
+      <ColumnHeader col={col} date={date} />
       <Stack gap={8} mih={60}>
         {children}
         {col.jobs.length === 0 && (
@@ -393,7 +446,7 @@ export default function Dispatch() {
       <ScrollArea type="auto" offsetScrollbars scrollbarSize={8}>
         <Group gap={12} align="flex-start" wrap="nowrap" pb={8}>
           {columns.map((c) => (
-            <BoardColumn key={c.id} col={c}>
+            <BoardColumn key={c.id} col={c} date={date}>
               <SortableContext items={c.jobs.map((j) => j.id)} strategy={verticalListSortingStrategy}>
                 {c.jobs.map((j) => (
                   <SortableJob key={j.id} job={j} onOpen={() => navigate(`/jobs/${j.id}`)} onHover={setHighlight} highlight={highlight === j.id} />

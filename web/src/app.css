@@ -319,3 +319,8 @@ body {
 @media (min-width: 62em) { .wt-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; } }
 @media (max-width: 47.99em) { .wt-filters > * { flex: 1 1 calc(50% - 6px) !important; width: auto !important; min-width: 0 !important; } }
 .wt-row + .wt-row { border-top: 1px solid var(--wt-border); }
+
+/* Running low */
+@media (min-width: 62em) { .wt-forecast-list { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.wt-forecast[data-state="empty"] { box-shadow: inset 3px 0 0 var(--mantine-color-red-6); }
+.wt-forecast[data-state="low"] { box-shadow: inset 3px 0 0 var(--mantine-color-orange-6); }

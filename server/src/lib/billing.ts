@@ -7,9 +7,16 @@ import { getSettings, type Settings } from './settings.js';
 const round2 = (v: number) => Math.round(v * 100) / 100;
 
 /** The customer's agreed rate for an item, or the price book rate. */
-async function rateFor(c: Db, customerId: string, itemId: string, fallback: number): Promise<number> {
-  const { rows } = await c.query('select unit_price from customer_rates where customer_id = $1 and price_item_id = $2', [customerId, itemId]);
-  return rows[0] ? Number(rows[0].unit_price) : Number(fallback);
+/** Price for one customer: their own agreed rate, else their class's rate, else the price book. */
+export async function rateFor(c: Db, customerId: string, itemId: string, fallback: number): Promise<number> {
+  const { rows } = await c.query(
+    `select coalesce(
+       (select unit_price from customer_rates where customer_id = $1 and price_item_id = $2),
+       (select cr.unit_price from class_rates cr join customers cu on cu.customer_class = cr.customer_class where cu.id = $1 and cr.price_item_id = $2)
+     ) as unit_price`,
+    [customerId, itemId],
+  );
+  return rows[0]?.unit_price != null ? Number(rows[0].unit_price) : Number(fallback);
 }
 
 /** Line items for a just-completed job, from the price book: water by the litre, a delivery fee, and anything set to auto-add. */

@@ -18,6 +18,10 @@ import fileRoutes from './routes/files.js';
 import billingRoutes from './routes/billing.js';
 import collabRoutes from './routes/collab.js';
 import recurringRoutes from './routes/recurring.js';
+import fleetRoutes from './routes/fleet.js';
+import messageRoutes from './routes/messages.js';
+import { quickbooksPublicRoutes, quickbooksRoutes } from './routes/quickbooks.js';
+import { alertResident } from './lib/messaging.js';
 import portalRoutes from './routes/portal.js';
 import mapRoutes from './routes/map.js';
 
@@ -47,6 +51,14 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   app.decorate('pool', deps.pool);
   app.decorate('push', deps.push ?? expoPush);
   app.decorate('bus', deps.bus ?? new LiveBus());
+  // Live events relayed to Ably must leave before a serverless instance freezes.
+  app.addHook('onSend', async () => { await app.bus.drain(); });
+  // Residents who opted in hear when their delivery is booked, on the way and done.
+  app.bus.on('event', (e) => {
+    if (e.type === 'job' && ['scheduled', 'en_route', 'completed'].includes(e.status)) {
+      app.bus.track(alertResident(app.pool, e.jobId, e.status).catch((err) => app.log.error(err)));
+    }
+  });
 
   await app.register(fastifyCors, { origin: true });
   await app.register(fastifyJwt, { secret: config.jwtSecret, sign: { expiresIn: '30d' } });
@@ -82,6 +94,10 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   await app.register(billingRoutes, { prefix: '/api' });
   await app.register(collabRoutes, { prefix: '/api' });
   await app.register(recurringRoutes, { prefix: '/api' });
+  await app.register(fleetRoutes, { prefix: '/api' });
+  await app.register(messageRoutes, { prefix: '/api' });
+  await app.register(quickbooksRoutes, { prefix: '/api' });
+  await app.register(quickbooksPublicRoutes, { prefix: '/api/public' });
   await app.register(portalRoutes, { prefix: '/api/public' });
 
   if ((deps.serveWeb ?? true) && fs.existsSync(config.webDist)) {
