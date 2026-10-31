@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyJwt from '@fastify/jwt';
 import fastifyCors from '@fastify/cors';
-import fastifyStatic from '@fastify/static';
 import type pg from 'pg';
 import { config } from './config.js';
 import { HttpError } from './http.js';
@@ -76,6 +75,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   await app.register(fileRoutes, { prefix: '/api' });
 
   if ((deps.serveWeb ?? true) && fs.existsSync(config.webDist)) {
+    // Loaded only when serving the web app: Vercel's function runtime can't load
+    // this plugin's ES module dependencies, and doesn't need it there.
+    const { default: fastifyStatic } = await import('@fastify/static');
     await app.register(fastifyStatic, { root: config.webDist });
     // Client-side routing: unknown non-API paths load the web app.
     app.setNotFoundHandler((req, reply) => {
