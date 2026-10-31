@@ -8,11 +8,11 @@
     },
     "preview": {
       "distribution": "internal",
-      "env": { "EXPO_PUBLIC_API_URL": "https://REPLACE-WITH-YOUR-SERVER" }
+      "env": { "EXPO_PUBLIC_API_URL": "https://water-truck-metering.vercel.app" }
     },
     "production": {
       "autoIncrement": true,
-      "env": { "EXPO_PUBLIC_API_URL": "https://REPLACE-WITH-YOUR-SERVER" }
+      "env": { "EXPO_PUBLIC_API_URL": "https://water-truck-metering.vercel.app" }
     }
   },
   "submit": {
