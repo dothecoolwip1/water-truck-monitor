@@ -1,12 +1,12 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { tx } from '../db.js';
+import { tx, updateRow } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { fleetStatus } from '../lib/fleet.js';
 import { forecastSites } from '../lib/forecast.js';
 import { optimizeStops, routeLength } from '../lib/routing.js';
 import { getSettings } from '../lib/settings.js';
-import { HttpError, isoDate, office, optionalText, parse, uuid } from '../http.js';
+import { HttpError, isoDate, office, optionalText, parse, uuid, parsePatch } from '../http.js';
 
 const taskFields = z.object({
   truck_id: uuid,
@@ -85,15 +85,9 @@ const routes: FastifyPluginAsync = async (app) => {
   });
   app.patch('/maintenance/tasks/:id', { preHandler: office }, async (req) => {
     const id = parse(uuid, (req.params as { id: string }).id);
-    const b = parse(taskFields.omit({ truck_id: true }).partial(), req.body) as Record<string, unknown>;
-    const keys = Object.keys(b);
-    if (!keys.length) throw new HttpError(400, 'Nothing to update');
-    const { rows } = await app.pool.query(
-      `update maintenance_tasks set ${keys.map((k, i) => `${k} = $${i + 2}`).join(', ')} where id = $1 returning *`,
-      [id, ...keys.map((k) => b[k] ?? null)],
-    );
-    if (!rows[0]) throw new HttpError(404, 'Task not found');
-    return rows[0];
+    const row = await updateRow(app.pool, 'maintenance_tasks', id, parsePatch(taskFields.omit({ truck_id: true }), req.body));
+    if (!row) throw new HttpError(404, 'Task not found');
+    return row;
   });
   app.delete('/maintenance/tasks/:id', { preHandler: office }, async (req) => {
     const id = parse(uuid, (req.params as { id: string }).id);

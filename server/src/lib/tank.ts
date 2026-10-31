@@ -67,7 +67,14 @@ export function findDrawdowns(readings: TimedVolume[], noiseL: number): Drawdown
       low = r;
       continue;
     }
-    if (r.volume_l <= low!.volume_l) {
+    if (start.volume_l - r.volume_l < noiseL && start.volume_l - low!.volume_l < noiseL) {
+      // Still flat (no real drop yet): slide the start forward so the drawdown
+      // begins at the last reading before the level falls, not at the start of
+      // an overnight plateau. Otherwise it is counted on the wrong day.
+      // Keep the plateau's highest level so sensor jitter isn't lost.
+      start = { ts: r.ts, volume_l: Math.max(start.volume_l, r.volume_l) };
+      low = r;
+    } else if (r.volume_l <= low!.volume_l) {
       low = r;
     } else if (r.volume_l - low!.volume_l > noiseL) {
       // Real rise: the drawdown (if any) is over and a new one may start here.

@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { anyUser, HttpError, parse } from '../http.js';
+import { anyUser, HttpError, parse, forgetStaff } from '../http.js';
 
 const routes: FastifyPluginAsync = async (app) => {
   app.post('/auth/login', async (req) => {
@@ -36,8 +36,10 @@ const routes: FastifyPluginAsync = async (app) => {
     if (!rows[0] || !(await bcrypt.compare(body.current, rows[0].password_hash))) {
       throw new HttpError(400, 'Current password is wrong');
     }
-    await app.pool.query('update users set password_hash = $2 where id = $1', [req.user.id, await bcrypt.hash(body.next, 10)]);
-    return { ok: true };
+    await app.pool.query('update users set password_hash = $2, password_changed_at = now() where id = $1', [req.user.id, await bcrypt.hash(body.next, 10)]);
+    forgetStaff(req.user.id);
+    // Other devices are signed out; this one gets a fresh token.
+    return { ok: true, token: app.jwt.sign({ id: req.user.id, role: req.user.role, name: req.user.name }) };
   });
 };
 

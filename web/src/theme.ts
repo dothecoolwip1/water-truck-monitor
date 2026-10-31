@@ -12,6 +12,8 @@ const ink: MantineColorsTuple = [
 export const theme = createTheme({
   primaryColor: 'water',
   primaryShade: { light: 7, dark: 5 },
+  // Filled badges and buttons on light colours (orange, yellow) switch to dark text.
+  autoContrast: true,
   colors: { water: tide, dark: ink },
   white: '#ffffff',
   black: '#0d1420',

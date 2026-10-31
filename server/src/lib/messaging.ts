@@ -118,8 +118,7 @@ export async function alertResident(db: Db, jobId: string, status: string): Prom
   let token = j.track_token as string | null;
   if (!token && kind !== 'completed') {
     token = randomBytes(12).toString('base64url');
-    await db.query('update jobs set track_token = coalesce(track_token, $2) where id = $1', [jobId, token]);
-    token = (await db.query('select track_token from jobs where id = $1', [jobId])).rows[0].track_token;
+    token = (await db.query('update jobs set track_token = coalesce(track_token, $2) where id = $1 returning track_token', [jobId, token])).rows[0].track_token;
   }
   const link = token ? ` Track it: ${publicUrl()}/track/${token}` : '';
   const org = s.company.name;
@@ -128,6 +127,8 @@ export async function alertResident(db: Db, jobId: string, status: string): Prom
       : kind === 'en_route' ? `${org}: the water truck is on its way to ${j.site_label}.${link}`
         : `${org}: ${Math.round(Number(j.litres ?? 0)).toLocaleString('en-CA')} L delivered to ${j.site_label}. Thank you.`;
   const subject = kind === 'scheduled' ? 'Water delivery booked' : kind === 'en_route' ? 'Your water truck is on the way' : 'Water delivered';
-  if (j.notify_sms) await deliver(db, { customerId: j.customer_id, jobId, kind, channel: 'sms', to: j.phone, subject, body: text }, s);
-  if (j.notify_email) await deliver(db, { customerId: j.customer_id, jobId, kind, channel: 'email', to: j.email, subject, body: text }, s);
+  await Promise.all([
+    j.notify_sms && deliver(db, { customerId: j.customer_id, jobId, kind, channel: 'sms', to: j.phone, subject, body: text }, s),
+    j.notify_email && deliver(db, { customerId: j.customer_id, jobId, kind, channel: 'email', to: j.email, subject, body: text }, s),
+  ]);
 }

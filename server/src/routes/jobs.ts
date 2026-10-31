@@ -6,7 +6,7 @@ import { completeJob, getJob, JOB_SELECT, notifyAssignment } from '../lib/jobs.j
 import { ticketPdf } from '../lib/pdf.js';
 import { ensureRecurring } from '../lib/recurring.js';
 import { config } from '../config.js';
-import { badRequest, HttpError, isoDate, office, optionalText, parse, uuid } from '../http.js';
+import { badRequest, HttpError, isoDate, office, optionalText, parse, uuid, parsePatch } from '../http.js';
 
 const jobFields = z.object({
   customer_id: uuid,
@@ -115,7 +115,7 @@ const routes: FastifyPluginAsync = async (app) => {
 
   app.patch('/jobs/:id', { preHandler: office }, async (req) => {
     const id = parse(uuid, (req.params as { id: string }).id);
-    const body = parse(jobFields.partial().extend({ sort_order: z.number().int().optional() }), req.body) as Record<string, unknown>;
+    const body = parsePatch(jobFields.extend({ sort_order: z.number().int().optional() }), req.body) as Record<string, unknown>;
     const keys = Object.keys(body);
     if (keys.length === 0) throw badRequest('Nothing to update');
     const { job, reassigned } = await tx(app.pool, async (c) => {

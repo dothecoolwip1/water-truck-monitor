@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ActionIcon, Box, Button, Group, Menu, ScrollArea, SegmentedControl, SimpleGrid, Stack, Text, Tooltip } from '@mantine/core';
+import { ActionIcon, Box, Button, Group, Menu, ScrollArea, SegmentedControl, SimpleGrid, Stack, Text, Tooltip, VisuallyHidden } from '@mantine/core';
 import { useLocalStorage, useMediaQuery } from '@mantine/hooks';
 import { modals } from '@mantine/modals';
 import {
@@ -483,9 +483,9 @@ export default function Dispatch() {
               value={view}
               onChange={(v) => setDeskView(v as View)}
               data={[
-                { value: 'board', label: <Tooltip label="Board"><Box><IconLayoutKanban size={17} /></Box></Tooltip> },
-                ...(wide ? [{ value: 'split', label: <Tooltip label="Board and map"><Box><IconLayoutColumns size={17} /></Box></Tooltip> }] : []),
-                { value: 'map', label: <Tooltip label="Map"><Box><IconMap size={17} /></Box></Tooltip> },
+                { value: 'board', label: <Tooltip label="Board"><Box><IconLayoutKanban size={17} /><VisuallyHidden>Board</VisuallyHidden></Box></Tooltip> },
+                ...(wide ? [{ value: 'split', label: <Tooltip label="Board and map"><Box><IconLayoutColumns size={17} /><VisuallyHidden>Board and map</VisuallyHidden></Box></Tooltip> }] : []),
+                { value: 'map', label: <Tooltip label="Map"><Box><IconMap size={17} /><VisuallyHidden>Map</VisuallyHidden></Box></Tooltip> },
               ]}
               styles={{ root: { height: 38 }, label: { padding: '6px 10px' } }}
             />
@@ -496,7 +496,7 @@ export default function Dispatch() {
       <SimpleGrid cols={{ base: 2, lg: 4 }} spacing="md" mb="lg">
         <StatCard label="Jobs delivered" value={<>{totals.done}<Text span c="dimmed" fz={18} fw={500}> / {totals.count}</Text></>} progress={totals.count ? totals.done / totals.count : 0} icon={<IconCircleCheck size={17} />} color="#10b981" />
         <StatCard label="Litres delivered" value={compactLitres(totals.delivered)} progress={totals.planned ? totals.delivered / totals.planned : 0} hint={`of ${compactLitres(totals.planned)} planned`} icon={<IconDroplet size={17} />} />
-        <StatCard label="Waiting to assign" value={totals.waiting} hint={totals.urgent ? <Group gap={4} c="red.6"><IconAlertTriangle size={13} />{totals.urgent} out of water</Group> : 'Requests queue'} icon={<IconInbox size={17} />} color="#f59e0b" />
+        <StatCard label="Waiting to assign" value={totals.waiting} hint={totals.urgent ? <Group gap={4} c="red"><IconAlertTriangle size={13} />{totals.urgent} out of water</Group> : 'Requests queue'} icon={<IconInbox size={17} />} color="#f59e0b" />
         <StatCard label="Trucks on duty" value={totals.onDuty} hint={`${driverCols.length} drivers today`} icon={<IconTruck size={17} />} color="#8b5cf6" />
       </SimpleGrid>
 

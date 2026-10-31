@@ -73,7 +73,7 @@ export const initials = (name: string | null | undefined) =>
   (name ?? '?').split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
 
 /** A stable, pleasant colour per person, for avatars. */
-const AVATAR = ['#2877eb', '#10b981', '#8b5cf6', '#f97316', '#0ea5e9', '#e11d48', '#14b8a6', '#a855f7'];
+const AVATAR = ['#1d63c9', '#047857', '#6d28d9', '#c2410c', '#0369a1', '#be123c', '#0f766e', '#7e22ce'];
 export function personColor(key: string | null | undefined): string {
   let h = 0;
   for (const ch of key ?? '') h = (h * 31 + ch.charCodeAt(0)) >>> 0;
@@ -82,3 +82,6 @@ export function personColor(key: string | null | undefined): string {
 
 export const money = (v: number | string | null | undefined, digits = 2) =>
   v === null || v === undefined || v === '' ? '—' : Number(v).toLocaleString('en-CA', { style: 'currency', currency: 'CAD', minimumFractionDigits: digits, maximumFractionDigits: Math.max(digits, 2) });
+
+/** A unit price: per-litre rates keep four decimals ($0.0425), everything else shows cents. */
+export const rate = (v: number | string | null | undefined) => money(v, Number(v) < 1 ? 4 : 2);

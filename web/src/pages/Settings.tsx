@@ -1,3 +1,4 @@
+import { arrayMove } from '@dnd-kit/sortable';
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
@@ -32,12 +33,7 @@ function SaveBar({ dirty, onSave, onReset, busy }: { dirty: boolean; onSave: () 
 
 function FieldEditor({ fields, onChange }: { fields: FormField[]; onChange: (f: FormField[]) => void }) {
   const set = (i: number, p: Partial<FormField>) => onChange(fields.map((f, k) => (k === i ? { ...f, ...p } : f)));
-  const move = (i: number, d: number) => {
-    const next = [...fields];
-    const [x] = next.splice(i, 1);
-    next.splice(i + d, 0, x);
-    onChange(next);
-  };
+  const move = (i: number, d: number) => onChange(arrayMove(fields, i, i + d));
   const keyFor = (label: string) => label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40) || `field_${fields.length + 1}`;
   return (
     <Stack gap="sm">
@@ -135,7 +131,7 @@ export default function Settings() {
     <Box maw={980}>
       <PageHeader title="Settings" subtitle="Company details, billing, approvals, resident alerts, truck inspections and connected apps." />
       <Tabs value={tab} onChange={(v) => setParams({ tab: v ?? 'company' }, { replace: true })} keepMounted>
-        <Select hiddenFrom="sm" mb="lg" size="md" allowDeselect={false} value={tab} onChange={(v) => setParams({ tab: v ?? 'company' }, { replace: true })}
+        <Select aria-label="Settings section" hiddenFrom="sm" mb="lg" size="md" allowDeselect={false} value={tab} onChange={(v) => setParams({ tab: v ?? 'company' }, { replace: true })}
           data={[{ value: 'company', label: 'Company' }, { value: 'billing', label: 'Billing' }, { value: 'approvals', label: 'Approvals' }, { value: 'portal', label: 'Resident page' }, { value: 'form', label: 'Driver checklist' }, { value: 'alerts', label: 'Alerts' }, { value: 'inspection', label: 'Inspection' }, { value: 'operations', label: 'Routes' }, { value: 'classes', label: 'Classes' }, { value: 'integrations', label: 'QuickBooks' }]} />
         <Tabs.List mb="lg" visibleFrom="sm" style={{ flexWrap: 'wrap' }}>
           <Tabs.Tab value="company" leftSection={<IconBuilding size={16} />}>Company</Tabs.Tab>

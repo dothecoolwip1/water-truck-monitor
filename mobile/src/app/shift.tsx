@@ -173,7 +173,7 @@ export default function ShiftScreen() {
                   })}
                 </View>
                 {checks[i] === false && (
-                  <TextInput placeholder="What's wrong?" placeholderTextColor={t.muted} value={notes[i] ?? ''} onChangeText={(v) => setNotes({ ...notes, [i]: v })}
+                  <TextInput maxLength={400} placeholder="What's wrong?" placeholderTextColor={t.muted} value={notes[i] ?? ''} onChangeText={(v) => setNotes({ ...notes, [i]: v })}
                     style={{ marginTop: 8, borderWidth: 1, borderColor: t.border, borderRadius: 10, padding: 12, fontSize: 17, color: t.text, backgroundColor: t.bg }} />
                 )}
               </Card>

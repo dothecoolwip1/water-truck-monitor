@@ -131,7 +131,7 @@ export default function CompleteScreen() {
             </Card>
           )}
 
-          <Field label="Received by (optional)" value={recipient} onChangeText={setRecipient} autoCapitalize="words" style={{ fontSize: 18 }} />
+          <Field maxLength={120} label="Received by (optional)" value={recipient} onChangeText={setRecipient} autoCapitalize="words" style={{ fontSize: 18 }} />
           <View
             onTouchStart={() => setScrollOn(false)}
             onTouchEnd={() => setScrollOn(true)}
@@ -140,7 +140,7 @@ export default function CompleteScreen() {
             <T size={14} weight="600" muted style={{ marginBottom: 6 }}>Signature (optional)</T>
             <SignaturePad ref={sig} />
           </View>
-          <Field label="Notes (optional)" value={notes} onChangeText={setNotes} multiline style={{ fontSize: 17, minHeight: 80, textAlignVertical: 'top', paddingTop: 12 }} />
+          <Field maxLength={2000} label="Notes (optional)" value={notes} onChangeText={setNotes} multiline style={{ fontSize: 17, minHeight: 80, textAlignVertical: 'top', paddingTop: 12 }} />
           <BigButton title="Save delivery" onPress={save} busy={busy} disabled={value === null} />
           <T size={13} muted style={{ textAlign: 'center' }}>Saved on the phone first, then sent to the office when there's signal.</T>
         </ScrollView>
@@ -155,7 +155,7 @@ function Question({ field, value, onChange }: { field: FormField; value: FormVal
   const label = `${field.label}${field.required ? '' : ' (optional)'}`;
   if (field.type === 'text' || field.type === 'number') {
     return (
-      <Field label={label} value={value == null ? '' : String(value)} keyboardType={field.type === 'number' ? 'decimal-pad' : 'default'}
+      <Field maxLength={500} label={label} value={value == null ? '' : String(value)} keyboardType={field.type === 'number' ? 'decimal-pad' : 'default'}
         onChangeText={(v) => onChange(field.type === 'number' ? parseNum(v) : v)} style={{ fontSize: 18 }} />
     );
   }

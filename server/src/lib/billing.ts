@@ -1,3 +1,5 @@
+import { toCsv } from './csv.js';
+import { config } from '../config.js';
 import type pg from 'pg';
 import type { Db } from '../db.js';
 import { HttpError } from '../http.js';
@@ -6,7 +8,6 @@ import { getSettings, type Settings } from './settings.js';
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
 
-/** The customer's agreed rate for an item, or the price book rate. */
 /** Price for one customer: their own agreed rate, else their class's rate, else the price book. */
 export async function rateFor(c: Db, customerId: string, itemId: string, fallback: number): Promise<number> {
   const { rows } = await c.query(
@@ -32,9 +33,12 @@ export async function buildLines(c: pg.PoolClient, jobId: string): Promise<void>
   const { rows: items } = await c.query(
     `select * from price_items where active and (kind in ('water', 'delivery') or auto_add) order by kind = 'water' desc, kind = 'delivery' desc, name`,
   );
+  // One per-litre water price and one delivery fee per job (an auto-add one wins), plus every other auto-add item.
+  const pick = (kind: string) => items.find((x) => x.kind === kind && x.auto_add) ?? items.find((x) => x.kind === kind);
+  const chosen = new Set([pick('water')?.id, pick('delivery')?.id]);
   let sort = 0;
   for (const it of items) {
-    if (it.kind === 'water' && !it.auto_add && items.some((x) => x.kind === 'water' && x.auto_add && x.id !== it.id)) continue;
+    if ((it.kind === 'water' || it.kind === 'delivery') && !chosen.has(it.id)) continue;
     const qty = it.kind === 'water' ? Number(job.litres) : 1;
     if (qty <= 0) continue;
     const price = await rateFor(c, job.customer_id, it.id, it.unit_price);
@@ -143,11 +147,10 @@ export async function generateInvoices(c: pg.PoolClient, opts: { from: string; t
     `select j.customer_id, array_agg(j.id order by j.completed_at) as job_ids
      from jobs j
      where j.status = 'completed' and j.approval_status = 'approved' and j.invoice_id is null
-       and (j.completed_at at time zone 'UTC')::date between $1::date - 1 and $2::date + 1
-       and coalesce(j.scheduled_date, j.completed_at::date) between $1 and $2
+       and (j.completed_at at time zone $4)::date between $1 and $2
        and ($3::uuid is null or j.customer_id = $3)
      group by j.customer_id`,
-    [opts.from, opts.to, opts.customerId ?? null],
+    [opts.from, opts.to, opts.customerId ?? null, config.timezone],
   );
   const created: string[] = [];
   for (const g of rows) {
@@ -171,26 +174,31 @@ export async function recalcInvoice(c: Db, invoiceId: string) {
 }
 
 export async function invoiceDetail(c: Db, id: string) {
-  const inv = await c.query(
-    `select i.*, c.name as customer_name, c.account_code, c.email as customer_email, c.phone as customer_phone
-     from invoices i join customers c on c.id = i.customer_id where i.id = $1`,
-    [id],
-  );
-  if (!inv.rows[0]) throw new HttpError(404, 'Invoice not found');
-  const lines = await c.query(
-    `select l.*, round(l.quantity * l.unit_price, 2)::float8 as amount, j.number as job_number, j.completed_at, s.label as site_label,
-            p.code as item_code
-     from job_lines l join jobs j on j.id = l.job_id join sites s on s.id = j.site_id left join price_items p on p.id = l.price_item_id
-     where j.invoice_id = $1 order by j.completed_at, j.number, l.sort`,
-    [id],
-  );
-  return { ...inv.rows[0], lines: lines.rows };
+  const [inv] = await invoiceDetails(c, [id]);
+  if (!inv) throw new HttpError(404, 'Invoice not found');
+  return inv;
 }
 
-const csvCell = (v: unknown) => {
-  const s = v === null || v === undefined ? '' : String(v);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-};
+/** Invoices with their lines, in two queries however many there are. Kept in the order asked for. */
+export async function invoiceDetails(c: Db, ids: string[]) {
+  const [inv, lines] = await Promise.all([
+    c.query(
+      `select i.*, c.name as customer_name, c.account_code, c.email as customer_email, c.phone as customer_phone
+       from invoices i join customers c on c.id = i.customer_id where i.id = any($1::uuid[])`,
+      [ids],
+    ),
+    c.query(
+      `select l.*, round(l.quantity * l.unit_price, 2)::float8 as amount, j.invoice_id, j.number as job_number, j.completed_at, s.label as site_label,
+              p.code as item_code
+       from job_lines l join jobs j on j.id = l.job_id join sites s on s.id = j.site_id left join price_items p on p.id = l.price_item_id
+       where j.invoice_id = any($1::uuid[]) order by j.completed_at, j.number, l.sort`,
+      [ids],
+    ),
+  ]);
+  const byId = new Map(inv.rows.map((r) => [r.id as string, { ...r, lines: [] as typeof lines.rows }]));
+  for (const l of lines.rows) byId.get(l.invoice_id)?.lines.push(l);
+  return ids.map((id) => byId.get(id)).filter((x): x is NonNullable<typeof x> => !!x);
+}
 
 const mdy = (d: string | Date) => {
   const x = typeof d === 'string' ? new Date(`${d.slice(0, 10)}T12:00:00`) : d;
@@ -202,18 +210,18 @@ type InvoiceDetail = Awaited<ReturnType<typeof invoiceDetail>>;
 /** QuickBooks Online "Import invoices" CSV: one row per line item. */
 export function quickbooksCsv(invoices: InvoiceDetail[], settings: Settings): string {
   const head = ['InvoiceNo', 'Customer', 'InvoiceDate', 'DueDate', 'Terms', 'Memo', 'Item(Product/Service)', 'ItemDescription', 'ItemQuantity', 'ItemRate', 'ItemAmount', 'ItemTaxCode'];
-  const out = [head.join(',')];
+  const rows: unknown[][] = [];
   for (const inv of invoices) {
     for (const l of inv.lines) {
-      out.push([
+      rows.push([
         `${settings.invoice.prefix}${inv.number}`, inv.customer_name, mdy(inv.issue_date), inv.due_date ? mdy(inv.due_date) : '',
         `Net ${settings.invoice.terms_days}`, `Water deliveries ${inv.period_start ?? ''} to ${inv.period_end ?? ''}`,
         l.item_code ?? l.description, `Job #${l.job_number} · ${l.site_label} · ${l.description}`, l.quantity, l.unit_price, l.amount,
         l.taxable ? settings.tax.label : 'Exempt',
-      ].map(csvCell).join(','));
+      ]);
     }
   }
-  return out.join('\r\n') + '\r\n';
+  return toCsv(head, rows);
 }
 
 /** QuickBooks Desktop IIF transactions (INVOICE with SPL lines). */

@@ -4,7 +4,7 @@ import { DatePickerInput } from '@mantine/dates';
 import { IconCalendar, IconDroplet, IconInfoCircle, IconMapPin, IconTruck, IconUser } from '@tabler/icons-react';
 import { patch, post, type Customer, type Job, type Site, type Truck, type User } from '../api';
 import { useApi, useInvalidate } from '../hooks';
-import { addDays, litres as fmtLitres } from '../format';
+import { addDays, litres as fmtLitres, todayIso } from '../format';
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -64,14 +64,14 @@ export default function JobForm({ job, defaultDate, defaultCustomerId, defaultSi
       notes: notes || null,
       tags,
     };
-    const days = weekdays.length ? weekdays : [String(new Date(`${date ?? new Date().toISOString().slice(0, 10)}T12:00:00`).getDay())];
+    const days = weekdays.length ? weekdays : [String(new Date(`${date ?? todayIso()}T12:00:00`).getDay())];
     try {
       const saved = job ? await patch<Job>(`/jobs/${job.id}`, body) : await post<Job>('/jobs', body);
       if (!job && repeat) {
         // The first job is made now; the standing order makes the following ones (it skips dates that already have a job).
         await post('/recurring', {
           customer_id: customerId, site_id: siteId, requested_litres: body.requested_litres, weekdays: days.map(Number),
-          start_date: addDays(date ?? new Date().toISOString().slice(0, 10), 1), driver_id: body.driver_id, truck_id: body.truck_id, notes: body.notes, tags,
+          start_date: addDays(date ?? todayIso(), 1), driver_id: body.driver_id, truck_id: body.truck_id, notes: body.notes, tags,
         });
         void invalidate('/recurring');
       }

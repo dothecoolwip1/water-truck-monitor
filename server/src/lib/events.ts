@@ -30,15 +30,16 @@ export class LiveBus extends EventEmitter {
   publish(event: LiveEvent): void {
     this.emit('event', event);
     if (!this.ablyKey) return;
-    const p = fetch(`https://rest.ably.io/channels/${LIVE_CHANNEL}/messages`, {
+    this.track(fetch(`https://rest.ably.io/channels/${LIVE_CHANNEL}/messages`, {
       method: 'POST',
-      headers: { authorization: `Basic ${Buffer.from(this.ablyKey).toString('base64')}`, 'content-type': 'application/json' },
+      headers: { authorization: this.auth(), 'content-type': 'application/json' },
       body: JSON.stringify({ name: event.type, data: JSON.stringify(event) }),
       signal: AbortSignal.timeout(4000),
-    })
-      .catch(() => undefined)
-      .finally(() => this.inflight.delete(p));
-    this.inflight.add(p);
+    }));
+  }
+
+  private auth(): string {
+    return `Basic ${Buffer.from(this.ablyKey ?? '').toString('base64')}`;
   }
 
   /** Background work (relays, resident alerts) that must finish before the response goes out. */
@@ -58,7 +59,7 @@ export class LiveBus extends EventEmitter {
     const keyName = this.ablyKey.split(':')[0];
     const res = await fetch(`https://rest.ably.io/keys/${encodeURIComponent(keyName)}/requestToken`, {
       method: 'POST',
-      headers: { authorization: `Basic ${Buffer.from(this.ablyKey).toString('base64')}`, 'content-type': 'application/json' },
+      headers: { authorization: this.auth(), 'content-type': 'application/json' },
       body: JSON.stringify({ keyName, clientId, capability: JSON.stringify({ [LIVE_CHANNEL]: ['subscribe'] }), ttl: 60 * 60 * 1000, timestamp: Date.now() }),
       signal: AbortSignal.timeout(5000),
     });

@@ -37,7 +37,7 @@ function Row({ f, i, onBook }: { f: SiteForecast; i: number; onBook: () => void 
             </Group>
             <Text size="sm" c="dimmed" truncate>{f.customer_name}{f.site_address ? ` · ${f.site_address}` : ''}</Text>
           </Box>
-          <Badge color={color} variant={f.state === 'ok' || f.state === 'unknown' ? 'light' : 'filled'} style={{ flexShrink: 0 }}>{STATE_LABEL[f.state]}</Badge>
+          <Badge color={f.state === 'empty' ? 'red.9' : color} variant={f.state === 'empty' ? 'filled' : 'light'} style={{ flexShrink: 0 }}>{STATE_LABEL[f.state]}</Badge>
         </Group>
 
         <Box mt="sm">
@@ -45,7 +45,7 @@ function Row({ f, i, onBook }: { f: SiteForecast; i: number; onBook: () => void 
             <Text size="sm" fw={600}>{daysText(f)}</Text>
             {f.level_pct !== null && <Text size="sm" c="dimmed">{Math.round(f.level_pct)}% · {litres(f.level_l)}</Text>}
           </Group>
-          <Progress value={f.level_pct ?? 0} color={color} size="lg" radius="xl" />
+          <Progress value={f.level_pct ?? 0} color={color} size="lg" radius="xl" aria-label={`${f.site_label} tank level`} />
           <Group justify="space-between" mt={6} gap="xs">
             <Text size="xs" c="dimmed">
               {f.litres_per_day !== null ? `Uses about ${litres(Math.round(f.litres_per_day))} a day` : `${f.deliveries} ${f.deliveries === 1 ? 'delivery' : 'deliveries'} on record`}

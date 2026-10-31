@@ -27,12 +27,12 @@ export default function NotificationsBell({ dark = false }: { dark?: boolean }) 
   return (
     <Popover opened={open} onChange={setOpen} position="bottom-end" width={360} shadow="lg" radius="lg" withinPortal>
       <Popover.Target>
-        <Indicator disabled={!unread} label={unread > 9 ? '9+' : unread} size={16} offset={6} color="red" withBorder>
-          <ActionIcon variant="subtle" color={dark ? 'gray.4' : 'gray'} size={38} radius="xl" onClick={() => setOpen((o) => !o)} aria-label="Notifications"
-            style={dark ? { color: '#9aa6b8' } : undefined}>
+        <ActionIcon variant="subtle" color={dark ? 'gray.4' : 'gray'} size={38} radius="xl" onClick={() => setOpen((o) => !o)}
+          aria-label={unread ? `Notifications, ${unread} unread` : 'Notifications'} style={dark ? { color: '#9aa6b8' } : undefined}>
+          <Indicator disabled={!unread} label={unread > 9 ? '9+' : unread} size={16} offset={-2} color="red" withBorder>
             <IconBell size={20} />
-          </ActionIcon>
-        </Indicator>
+          </Indicator>
+        </ActionIcon>
       </Popover.Target>
       <Popover.Dropdown p={0}>
         <Group justify="space-between" px="md" py="sm" style={{ borderBottom: '1px solid var(--wt-border)' }}>

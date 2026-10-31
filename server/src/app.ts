@@ -26,6 +26,8 @@ import portalRoutes from './routes/portal.js';
 import mapRoutes from './routes/map.js';
 
 export interface AppDeps {
+  /** Wait for background work before each response (default true, for serverless). */
+  drainBeforeSend?: boolean;
   pool: pg.Pool;
   push?: PushSender;
   bus?: LiveBus;
@@ -51,8 +53,9 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   app.decorate('pool', deps.pool);
   app.decorate('push', deps.push ?? expoPush);
   app.decorate('bus', deps.bus ?? new LiveBus());
-  // Live events relayed to Ably must leave before a serverless instance freezes.
-  app.addHook('onSend', async () => { await app.bus.drain(); });
+  // Serverless functions freeze once they respond, so background sends (Ably relays, resident
+  // alerts) finish first. A long-running server passes drainBeforeSend: false and lets them finish on their own.
+  if (deps.drainBeforeSend !== false) app.addHook('onSend', async () => { await app.bus.drain(); });
   // Residents who opted in hear when their delivery is booked, on the way and done.
   app.bus.on('event', (e) => {
     if (e.type === 'job' && ['scheduled', 'en_route', 'completed'].includes(e.status)) {

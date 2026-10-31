@@ -201,3 +201,29 @@ describe('quickbooks', () => {
     expect(cb.headers.location).toContain('qbo=expired');
   });
 });
+
+describe('staff sign-in revocation', () => {
+  it('stops an existing token as soon as the account is demoted, deactivated or its password reset', async () => {
+    const u = (await api('POST', '/api/users', admin, { name: 'Dana Office', email: 'dana@test.local', role: 'dispatcher', password: 'dispatch-pass' })).body;
+    const tok = (await api('POST', '/api/auth/login', undefined, { email: 'dana@test.local', password: 'dispatch-pass' })).body.token;
+    expect((await api('GET', '/api/customers', tok)).status).toBe(200);
+    await api('PATCH', `/api/users/${u.id}`, admin, { role: 'driver' });
+    expect((await api('GET', '/api/customers', tok)).status).toBe(403);
+    await api('PATCH', `/api/users/${u.id}`, admin, { role: 'dispatcher', active: false });
+    expect((await api('GET', '/api/customers', tok)).status).toBe(401);
+    await api('PATCH', `/api/users/${u.id}`, admin, { active: true });
+    expect((await api('GET', '/api/customers', tok)).status).toBe(200);
+    await pool.query(`update users set password_changed_at = now() + interval '5 seconds' where id = $1`, [u.id]);
+    (await import('../src/http.js')).forgetStaff(u.id);
+    expect((await api('GET', '/api/customers', tok)).status).toBe(401);
+  });
+});
+
+describe('partial updates', () => {
+  it('changing one field of a price item leaves the others alone', async () => {
+    const it0 = (await api('POST', '/api/price-items', admin, { code: 'WTR2', name: 'Water', unit: 'litre', unit_price: 0.04, kind: 'water', taxable: false })).body;
+    const r = await api('PATCH', `/api/price-items/${it0.id}`, admin, { unit_price: 0.05 });
+    expect(r.body).toMatchObject({ kind: 'water', unit: 'litre', taxable: false });
+    expect(Number(r.body.unit_price)).toBe(0.05);
+  });
+});

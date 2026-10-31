@@ -3,8 +3,8 @@ import type { FastifyPluginAsync, FastifyInstance, preHandlerHookHandler } from 
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { audit, diff } from '../lib/audit.js';
-import { tx } from '../db.js';
-import { badRequest, notFound, office, optionalText, parse, requireRole, uuid } from '../http.js';
+import { tx, updateRow } from '../db.js';
+import { badRequest, notFound, office, optionalText, parse, requireRole, uuid, parsePatch, forgetStaff } from '../http.js';
 
 const adminOnly = requireRole('admin');
 
@@ -57,18 +57,14 @@ function crud(app: FastifyInstance, r: Resource) {
 
   app.patch(`/${r.path}/:id`, { preHandler: r.write }, async (req) => {
     const id = parse(uuid, (req.params as { id: string }).id);
-    const body = parse(r.schema.partial(), req.body) as Record<string, unknown>;
-    const keys = Object.keys(body);
-    if (keys.length === 0) throw badRequest('Nothing to update');
+    const body = parsePatch(r.schema, req.body);
+    if (!Object.keys(body).length) throw badRequest('Nothing to update');
     return tx(app.pool, async (c) => {
       const before = (await c.query(`select ${r.columns} from ${r.table} where id = $1 for update`, [id])).rows[0];
       if (!before) throw notFound();
-      const { rows } = await c.query(
-        `update ${r.table} set ${keys.map((k, i) => `${k} = $${i + 2}`).join(', ')} where id = $1 returning ${r.columns}`,
-        [id, ...keys.map((k) => body[k])],
-      );
-      await audit(c, r.entity, id, 'updated', req.user.id, diff(before, rows[0]));
-      return rows[0];
+      const row = await updateRow(c, r.table, id, body, r.columns);
+      await audit(c, r.entity, id, 'updated', req.user.id, diff(before, row!));
+      return row;
     });
   });
 }
@@ -177,7 +173,7 @@ const routes: FastifyPluginAsync = async (app) => {
 
   app.patch('/users/:id', { preHandler: adminOnly }, async (req) => {
     const id = parse(uuid, (req.params as { id: string }).id);
-    const body = parse(userSchema.partial(), req.body);
+    const body = parsePatch(userSchema, req.body);
     if (id === req.user.id && (body.active === false || (body.role && body.role !== 'admin'))) {
       throw badRequest('You cannot deactivate or demote your own account');
     }
@@ -186,7 +182,7 @@ const routes: FastifyPluginAsync = async (app) => {
     for (const [k, v] of Object.entries(body)) {
       if (k === 'password') {
         vals.push(await bcrypt.hash(v as string, 10));
-        sets.push(`password_hash = $${vals.length}`);
+        sets.push(`password_hash = $${vals.length}`, 'password_changed_at = now()');
       } else {
         vals.push(v);
         sets.push(`${k} = $${vals.length}`);
@@ -194,6 +190,7 @@ const routes: FastifyPluginAsync = async (app) => {
     }
     if (sets.length === 0) throw badRequest('Nothing to update');
     const { rows } = await app.pool.query(`update users set ${sets.join(', ')} where id = $1 returning ${userColumns}`, vals);
+    forgetStaff(id);
     if (!rows[0]) throw notFound();
     const logged = { ...body, password: body.password ? '(changed)' : undefined };
     await audit(app.pool, 'user', id, 'updated', req.user.id, logged);
@@ -239,16 +236,11 @@ const routes: FastifyPluginAsync = async (app) => {
 
   app.patch('/tanks/:id', { preHandler: adminOnly }, async (req) => {
     const id = parse(uuid, (req.params as { id: string }).id);
-    const body = parse(tankSchema.partial(), req.body) as Record<string, unknown>;
-    const keys = Object.keys(body);
-    if (keys.length === 0) throw badRequest('Nothing to update');
-    const { rows } = await app.pool.query(
-      `update source_tanks set ${keys.map((k, i) => `${k} = $${i + 2}`).join(', ')} where id = $1 returning ${tankColumns}`,
-      [id, ...keys.map((k) => body[k])],
-    );
-    if (!rows[0]) throw notFound();
+    const body = parsePatch(tankSchema, req.body);
+    const row = await updateRow(app.pool, 'source_tanks', id, body, tankColumns);
+    if (!row) throw notFound();
     await audit(app.pool, 'tank', id, 'updated', req.user.id, body);
-    return rows[0];
+    return row;
   });
 
   app.post('/tanks/:id/rotate-key', { preHandler: adminOnly }, async (req) => {
