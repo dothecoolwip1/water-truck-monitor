@@ -21,10 +21,13 @@ export default function JobCard({ job, onOpen, actions, handle, dragging, overla
   const sub = job.customer_name !== job.site_label ? job.customer_name : job.site_address;
   const amount = job.status === 'completed' ? litres(job.delivered_litres) : job.requested_litres ? litres(job.requested_litres) : 'Fill to full';
   const when = jobWhen(job, showDate);
+  // A card with its own controls (drag handle, buttons) can't itself be a button, so the job number opens it instead.
+  const nested = !!(handle || actions);
   return (
     <div
-      role="button"
-      tabIndex={0}
+      role={nested ? undefined : 'button'}
+      tabIndex={nested ? undefined : 0}
+      aria-label={nested ? undefined : `Job #${job.number}, ${job.site_label}`}
       className="wt-job"
       style={{ ['--rail' as string]: job.priority === 2 ? '#ef4444' : STATUS_HEX[job.status] }}
       data-dragging={dragging || undefined}
@@ -39,9 +42,13 @@ export default function JobCard({ job, onOpen, actions, handle, dragging, overla
           <Group justify="space-between" gap={8} wrap="nowrap" align="flex-start">
             <Box style={{ minWidth: 0 }}>
               <Group gap={6} wrap="nowrap">
-                <span className="wt-chip-num">#{job.number}</span>
+                {nested && onOpen ? (
+                  <button type="button" className="wt-chip-num wt-chip-btn" aria-label={`Open job #${job.number}, ${job.site_label}`} onClick={(e) => { e.stopPropagation(); onOpen(); }}>#{job.number}</button>
+                ) : (
+                  <span className="wt-chip-num">#{job.number}</span>
+                )}
                 {job.priority === 2 && (
-                  <Group gap={3} wrap="nowrap" c="red.6"><IconAlertTriangleFilled size={13} /><Text size="xs" fw={650} c="red.6" style={{ whiteSpace: "nowrap" }}>Out of water</Text></Group>
+                  <Group gap={3} wrap="nowrap" c="red"><IconAlertTriangleFilled size={13} /><Text size="xs" fw={650} c="red" style={{ whiteSpace: "nowrap" }}>Out of water</Text></Group>
                 )}
                 {job.priority === 1 && <Text size="xs" fw={650} c="orange.6">High priority</Text>}
               </Group>

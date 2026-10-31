@@ -6,7 +6,7 @@ import { localToday } from '../lib/dates.js';
 import { scheduleDates } from '../lib/recurring.js';
 import { addDays } from '../lib/dates.js';
 import { config } from '../config.js';
-import { badRequest, HttpError, isoDate, office, optionalText, parse, uuid } from '../http.js';
+import { badRequest, HttpError, isoDate, office, optionalText, parse, uuid, parsePatch } from '../http.js';
 
 const fields = z.object({
   customer_id: uuid,
@@ -55,7 +55,7 @@ const routes: FastifyPluginAsync = async (app) => {
 
   app.patch('/recurring/:id', { preHandler: office }, async (req) => {
     const id = parse(uuid, (req.params as { id: string }).id);
-    const b = parse(fields.partial(), req.body) as Record<string, unknown>;
+    const b = parsePatch(fields, req.body) as Record<string, unknown>;
     if (Array.isArray(b.weekdays) && b.weekdays.length === 0) b.weekdays = null;
     const keys = Object.keys(b);
     if (!keys.length) throw badRequest('Nothing to update');

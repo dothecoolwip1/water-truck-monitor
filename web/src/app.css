@@ -2,12 +2,16 @@
 :root {
   --wt-bg: #f4f6fa;
   --wt-surface: #ffffff;
+  /* Chart series, validated for colour-blind separation and contrast on each surface. */
+  --viz-1: #2a78d6;
+  --viz-2: #eb6834;
+  --viz-3: #6250d6;
   --wt-surface-2: #f8f9fc;
   --wt-border: #e4e8ef;
   --wt-border-strong: #d3d9e3;
   --wt-text: #0d1420;
   --wt-muted: #5f6b7d;
-  --wt-subtle: #8b95a5;
+  --wt-subtle: #667082;
   --wt-sidebar: #0b1320;
   --wt-sidebar-2: #121c2c;
   --wt-sidebar-text: #9aa6b8;
@@ -22,12 +26,15 @@
 [data-mantine-color-scheme='dark'] {
   --wt-bg: #0a0e15;
   --wt-surface: #121822;
+  --viz-1: #3987e5;
+  --viz-2: #d95926;
+  --viz-3: #9085e9;
   --wt-surface-2: #161d29;
   --wt-border: #222b3a;
   --wt-border-strong: #2e3949;
   --wt-text: #e8edf4;
   --wt-muted: #9aa6b8;
-  --wt-subtle: #6f7b8e;
+  --wt-subtle: #8a96a9;
   --wt-sidebar: #070b11;
   --wt-sidebar-2: #0f1520;
   --wt-accent: #5190ee;
@@ -141,7 +148,7 @@ body {
   --c: #2877eb;
   display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px 0 7px; border-radius: 99px;
   font-size: 12px; font-weight: 600; white-space: nowrap; line-height: 1;
-  color: color-mix(in srgb, var(--c) 78%, var(--wt-text));
+  color: color-mix(in srgb, var(--c) 58%, var(--wt-text));
   background: color-mix(in srgb, var(--c) 12%, transparent);
 }
 .wt-status::before { content: ''; width: 6px; height: 6px; border-radius: 99px; background: var(--c); flex: none; }
@@ -324,3 +331,21 @@ body {
 @media (min-width: 62em) { .wt-forecast-list { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .wt-forecast[data-state="empty"] { box-shadow: inset 3px 0 0 var(--mantine-color-red-6); }
 .wt-forecast[data-state="low"] { box-shadow: inset 3px 0 0 var(--mantine-color-orange-6); }
+
+/* Secondary text clears 4.5:1 on every surface (Mantine's default grey is about 3:1). */
+:root[data-mantine-color-scheme='light'], :root[data-mantine-color-scheme='dark'] { --mantine-color-dimmed: var(--wt-muted); }
+/* Coloured text (warnings, overdue, money owed) dark enough to read on white. */
+:root[data-mantine-color-scheme='light'] {
+  --mantine-color-red-text: #c92a2a;
+  --mantine-color-orange-text: #c2410c;
+  --mantine-color-teal-text: #087059;
+  --mantine-color-green-text: #2b7a3b;
+  --mantine-color-yellow-text: #915300;
+  --mantine-color-cyan-text: #0b6b7d;
+  --mantine-color-red-light-color: #c92a2a;
+  --mantine-color-orange-light-color: #b8400b;
+  --mantine-color-teal-light-color: #086650;
+  --mantine-color-green-light-color: #2b7a3b;
+}
+.wt-chip-btn { background: none; border: 0; padding: 0; cursor: pointer; border-radius: 4px; }
+.wt-chip-btn:focus-visible { outline: 2px solid var(--mantine-primary-color-filled); outline-offset: 2px; }

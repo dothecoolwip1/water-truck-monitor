@@ -1,7 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { z } from 'zod';
 import { LIVE_CHANNEL, type LiveEvent } from '../lib/events.js';
-import { HttpError, office } from '../http.js';
+import { office } from '../http.js';
 
 const routes: FastifyPluginAsync = async (app) => {
   // Latest known position of everyone on duty, for the dispatch map.
@@ -28,16 +27,9 @@ const routes: FastifyPluginAsync = async (app) => {
 
   // Server-sent events so dispatch screens update without refreshing. EventSource
   // can't set headers, so the token comes in the query string.
-  app.get('/live/stream', async (req, reply) => {
+  app.get('/live/stream', { preHandler: office }, async (req, reply) => {
     // Serverless hosts can't fan events out between instances; the office app polls instead.
     if (process.env.LIVE_STREAM === 'off') return reply.status(204).send();
-    const { token } = z.object({ token: z.string() }).parse(req.query);
-    try {
-      const user = app.jwt.verify<{ role: string }>(token);
-      if (!['admin', 'dispatcher'].includes(user.role)) throw new Error('role');
-    } catch {
-      throw new HttpError(401, 'Sign in required');
-    }
     reply.raw.writeHead(200, {
       'content-type': 'text/event-stream',
       'cache-control': 'no-cache, no-transform',

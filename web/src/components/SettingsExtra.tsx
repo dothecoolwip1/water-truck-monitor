@@ -1,3 +1,4 @@
+import { arrayMove } from '@dnd-kit/sortable';
 import { useState } from 'react';
 import {
   ActionIcon, Alert, Badge, Box, Button, Code, CopyButton, Group, NumberInput, ScrollArea, SimpleGrid, Stack, Switch, Table, Text, TextInput, Tooltip,
@@ -83,12 +84,7 @@ export function InspectionPanel({ draft, up }: { draft: Settings; up: Up }) {
   const items = draft.inspection.items;
   const set = (next: string[]) => up('inspection', { items: next });
   const [adding, setAdding] = useState('');
-  const move = (i: number, d: number) => {
-    const next = [...items];
-    const [x] = next.splice(i, 1);
-    next.splice(i + d, 0, x);
-    set(next);
-  };
+  const move = (i: number, d: number) => set(arrayMove(items, i, i + d));
   return (
     <Section title="Pre-trip truck inspection">
       <Stack>

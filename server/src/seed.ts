@@ -10,7 +10,7 @@ import { afterDelivery, generateInvoices } from './lib/billing.js';
 import { getSettings, updateSettings } from './lib/settings.js';
 
 // Bump to replace an older demo data set (only demo data, never real records).
-const DEMO_VERSION = 7;
+const DEMO_VERSION = 8;
 const DEMO_CENTRE = { lat: 66.2565, lng: -128.6335 };
 const DEMO_EMAILS = ['dispatch@example.com', 'sam@example.com', 'lee@example.com', 'jo@example.com'];
 
@@ -270,21 +270,22 @@ async function demoHistory(
     for (let k = 0; k < d.drivers.length; k++) {
       let t = new Date(dayStart.getTime() + (8 + k * 0.25) * 3_600_000);
       let load = 0;
-      for (const i of due.filter((_, n) => n % d.drivers.length === k)) {
+      const stops = due.filter((_, n) => n % d.drivers.length === k).map((i) => ({ i, want: Math.round((d.sites[i].cap - level[i]) / 50) * 50 }));
+      let ahead = stops.reduce((sum, x) => sum + x.want, 0);
+      for (const { i, want } of stops) {
         const s = d.sites[i];
-        const want = Math.round((s.cap - level[i]) / 50) * 50;
         level[i] = s.cap;
         if (load < want) {
-          // Fill the truck at the bulk tank.
+          // Fill the truck at the bulk tank with what the rest of the run needs, plus a little spare.
           const fillStart = t;
           const fillEnd = new Date(t.getTime() + 12 * 60_000);
-          const amount = 13_600 - load;
+          const amount = Math.max(0, Math.min(13_600, Math.round((ahead * 1.03) / 100) * 100) - load);
           await c.query(
             `insert into fills (truck_id, driver_id, tank_id, started_at, ended_at, litres_reported) values ($1,$2,$3,$4,$5,$6)`,
             [d.trucks[k], d.drivers[k], tank, fillStart, fillEnd, Math.round(amount * (0.98 + rnd() * 0.03))],
           );
           events.push({ at: fillStart, drop: amount });
-          load = 13_600;
+          load += amount;
           t = new Date(fillEnd.getTime() + 5 * 60_000);
         }
         const start = t;
@@ -292,6 +293,7 @@ async function demoHistory(
         const done = new Date(arrive.getTime() + (want / 400) * 60_000);
         const delivered = Math.round(want * (0.97 + rnd() * 0.04));
         load -= delivered;
+        ahead -= want;
         const job = await c.query(
           `insert into jobs (customer_id, site_id, requested_litres, scheduled_date, driver_id, truck_id, status, started_at, arrived_at, arrival_source, completed_at)
            values ($1,$2,$3,($4::timestamptz at time zone $9)::date,$5,$6,'completed',$4,$7,'gps',$8) returning id`,

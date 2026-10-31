@@ -33,6 +33,14 @@ describe('findDrawdowns', () => {
     expect(d[0].end).toEqual(t(25));
   });
 
+  it('starts a fill at the end of a flat stretch, not its beginning', () => {
+    const series = [[0, 90_000], [600, 90_010], [1200, 89_990], [1210, 85_000], [1220, 80_000]]
+      .map(([m, v]) => ({ ts: t(m), volume_l: v }));
+    const [d] = findDrawdowns(series, 200);
+    expect(d.start).toEqual(t(1200));
+    expect(d.litres).toBe(10_010);
+  });
+
   it('returns nothing for a flat tank', () => {
     expect(findDrawdowns([{ ts: t(0), volume_l: 5 }, { ts: t(1), volume_l: 5 }], 200)).toEqual([]);
   });

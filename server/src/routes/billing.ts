@@ -1,12 +1,13 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { tx } from '../db.js';
+import { voidInQbo } from '../lib/quickbooks.js';
+import { tx, updateRow } from '../db.js';
 import { audit } from '../lib/audit.js';
-import { checkDelivery, generateInvoices, invoiceDetail, quickbooksCsv, quickbooksIif, recalcInvoice, setApproval } from '../lib/billing.js';
+import { checkDelivery, generateInvoices, invoiceDetail, invoiceDetails, quickbooksCsv, quickbooksIif, recalcInvoice, setApproval } from '../lib/billing.js';
 import { JOB_SELECT } from '../lib/jobs.js';
 import { invoicePdf } from '../lib/pdf.js';
 import { getSettings } from '../lib/settings.js';
-import { HttpError, isoDate, office, optionalText, parse, requireRole, uuid } from '../http.js';
+import { HttpError, isoDate, office, optionalText, parse, requireRole, uuid, parsePatch } from '../http.js';
 
 const adminOnly = requireRole('admin');
 const money = z.number().min(0).max(1_000_000);
@@ -70,15 +71,9 @@ const routes: FastifyPluginAsync = async (app) => {
   });
   app.patch('/price-items/:id', { preHandler: adminOnly }, async (req) => {
     const id = parse(uuid, (req.params as { id: string }).id);
-    const b = parse(itemFields.partial(), req.body) as Record<string, unknown>;
-    const keys = Object.keys(b);
-    if (!keys.length) throw new HttpError(400, 'Nothing to update');
-    const { rows } = await app.pool.query(
-      `update price_items set ${keys.map((k, i) => `${k} = $${i + 2}`).join(', ')} where id = $1 returning *`,
-      [id, ...keys.map((k) => b[k])],
-    );
-    if (!rows[0]) throw new HttpError(404, 'Item not found');
-    return rows[0];
+    const row = await updateRow(app.pool, 'price_items', id, parsePatch(itemFields, req.body));
+    if (!row) throw new HttpError(404, 'Item not found');
+    return row;
   });
 
   // Customer-specific rates (rate agreements).
@@ -128,8 +123,10 @@ const routes: FastifyPluginAsync = async (app) => {
       const j = (await c.query('select invoice_id, number from jobs where id = $1 for update', [id])).rows[0];
       if (!j) throw new HttpError(404, 'Job not found');
       if (j.invoice_id) {
-        const inv = (await c.query('select status from invoices where id = $1', [j.invoice_id])).rows[0];
-        if (inv?.status !== 'draft') throw new HttpError(409, `Job #${j.number} is on a ${inv?.status} invoice; void it to make changes`);
+        const inv = (await c.query('select status, qbo_id from invoices where id = $1', [j.invoice_id])).rows[0];
+        if (inv?.status !== 'draft' || inv.qbo_id) {
+          throw new HttpError(409, `Job #${j.number} is on ${inv?.qbo_id ? 'an invoice already in QuickBooks' : `a ${inv?.status} invoice`}; void it to make changes`);
+        }
       }
       await c.query('delete from job_lines where job_id = $1', [id]);
       for (const [i, l] of b.lines.entries()) {
@@ -216,10 +213,16 @@ const routes: FastifyPluginAsync = async (app) => {
   app.patch('/invoices/:id', { preHandler: office }, async (req) => {
     const id = parse(uuid, (req.params as { id: string }).id);
     const b = parse(z.object({ status: z.enum(['draft', 'sent', 'paid', 'void']).optional(), notes: optionalText }), req.body);
+    // The QuickBooks copy is voided first, outside the transaction, so no row lock waits on Intuit.
+    const current = (await app.pool.query('select status, qbo_id from invoices where id = $1', [id])).rows[0];
+    if (current && current.status !== 'void' && b.status === 'void' && current.qbo_id) await voidInQbo(app.pool, current.qbo_id);
     return tx(app.pool, async (c) => {
       const before = (await c.query('select * from invoices where id = $1 for update', [id])).rows[0];
       if (!before) throw new HttpError(404, 'Invoice not found');
       if (before.status === 'void') throw new HttpError(409, 'This invoice was voided');
+      if (before.qbo_id && b.status === 'draft') {
+        throw new HttpError(409, 'This invoice is already in QuickBooks. Void it and bill the deliveries again to change it.');
+      }
       if (b.status === 'void') {
         // Voiding frees the deliveries so they can be billed again.
         await c.query('update jobs set invoice_id = null where invoice_id = $1', [id]);
@@ -253,8 +256,7 @@ const routes: FastifyPluginAsync = async (app) => {
       ? q.ids.split(',').map((s) => parse(uuid, s))
       : (await app.pool.query('select id from invoices where status = any($1) order by number', [q.status.split(',')])).rows.map((r) => r.id);
     const settings = await getSettings(app.pool);
-    const invoices = [];
-    for (const id of ids) invoices.push(await invoiceDetail(app.pool, id));
+    const invoices = await invoiceDetails(app.pool, ids);
     const body = fmt === 'csv' ? quickbooksCsv(invoices, settings) : quickbooksIif(invoices, settings);
     reply.header('content-type', fmt === 'csv' ? 'text/csv; charset=utf-8' : 'text/plain; charset=utf-8');
     reply.header('content-disposition', `attachment; filename="quickbooks-invoices.${fmt}"`);

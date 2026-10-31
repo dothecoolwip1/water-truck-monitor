@@ -54,7 +54,15 @@ export async function disconnect(db: Db): Promise<void> {
 type QboEntity = { Id: string; [k: string]: unknown };
 
 export class QboClient {
+  private memo = new Map<string, Promise<unknown>>();
   private constructor(private db: Db, private realm: string, private access: string) {}
+
+  /** Work that doesn't change during one sync (settings, tax codes) runs once per client. */
+  once<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    if (!this.memo.has(key)) this.memo.set(key, fn());
+    return this.memo.get(key) as Promise<T>;
+  }
+  settings() { return this.once('settings', () => getSettings(this.db)); }
 
   /** Refresh tokens rotate on every use, so the new one is saved straight away. */
   static async open(db: Db): Promise<QboClient> {
@@ -141,11 +149,33 @@ export async function pushInvoice(db: Db, invoiceId: string, client?: QboClient)
   const inv = await invoiceDetail(db, invoiceId);
   if (inv.qbo_id) return { qbo_id: inv.qbo_id, created: false };
   if (inv.status === 'void') throw new HttpError(409, 'A void invoice is not sent to QuickBooks');
+  // Claim the invoice so a button press and a bulk sync can't both create it.
+  const claim = await db.query(
+    `update invoices set qbo_claimed_at = now() where id = $1 and qbo_id is null
+       and (qbo_claimed_at is null or qbo_claimed_at < now() - interval '2 minutes') returning id`,
+    [invoiceId],
+  );
+  if (!claim.rows[0]) throw new HttpError(409, 'This invoice is already being sent to QuickBooks');
+  try {
+    return await createInQbo(db, inv, client);
+  } finally {
+    await db.query('update invoices set qbo_claimed_at = null where id = $1', [invoiceId]);
+  }
+}
+
+/** Voids the QuickBooks copy of an invoice, so the deliveries can be billed again without charging twice. */
+export async function voidInQbo(db: Db, qboId: string): Promise<void> {
+  const q = await QboClient.open(db);
+  const cur = await q.get<{ Invoice: QboEntity & { SyncToken: string } }>(`/invoice/${encodeURIComponent(qboId)}`);
+  await q.post('/invoice?operation=void', { Id: qboId, SyncToken: cur.Invoice.SyncToken });
+}
+
+async function createInQbo(db: Db, inv: Awaited<ReturnType<typeof invoiceDetail>>, client?: QboClient) {
   const q = client ?? (await QboClient.open(db));
-  const s = await getSettings(db);
+  const s = await q.settings();
   const cust = (await db.query('select id, name, qbo_id, email, phone from customers where id = $1', [inv.customer_id])).rows[0];
   const customerRef = await ensureCustomer(q, db, cust);
-  const codes = await taxCodes(q, s);
+  const codes = await q.once('taxCodes', () => taxCodes(q, s));
   const items = new Map<string, string>();
   const Line = [];
   for (const l of inv.lines) {
@@ -172,6 +202,6 @@ export async function pushInvoice(db: Db, invoiceId: string, client?: QboClient)
     Line,
   };
   const created = await q.post<{ Invoice: QboEntity }>('/invoice', body);
-  await db.query('update invoices set qbo_id = $2, qbo_synced_at = now() where id = $1', [invoiceId, created.Invoice.Id]);
+  await db.query('update invoices set qbo_id = $2, qbo_synced_at = now() where id = $1', [inv.id, created.Invoice.Id]);
   return { qbo_id: created.Invoice.Id, created: true };
 }

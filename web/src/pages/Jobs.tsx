@@ -14,7 +14,7 @@ import { addDays, day, litres, money, STATUS_LABEL, time, todayIso } from '../fo
 function Approval({ j }: { j: Job }) {
   if (j.status !== 'completed') return <Text span c="dimmed">—</Text>;
   if (j.invoice_number) return <Badge variant="light" color="gray">Invoiced</Badge>;
-  if (j.approval_status === 'pending') return <Badge color="orange" leftSection={<IconAlertTriangle size={12} />}>Review</Badge>;
+  if (j.approval_status === 'pending') return <Badge color="orange" variant="light" leftSection={<IconAlertTriangle size={12} />}>Review</Badge>;
   if (j.approval_status === 'rejected') return <Badge color="red">Rejected</Badge>;
   return <Badge color="teal" leftSection={<IconCircleCheck size={12} />}>Approved</Badge>;
 }

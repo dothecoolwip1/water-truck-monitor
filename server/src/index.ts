@@ -14,7 +14,7 @@ if (process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
     adminPassword: process.env.ADMIN_PASSWORD,
   });
 }
-const app = await buildApp({ pool, logger: true });
+const app = await buildApp({ pool, logger: true, drainBeforeSend: false });
 await app.listen({ port: config.port, host: config.host });
 
 const shutdown = async () => {

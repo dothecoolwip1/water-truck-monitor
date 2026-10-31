@@ -12,7 +12,7 @@ import {
 import { authedUrl, patch, post, put, type BillingSummary, type Customer, type Invoice, type Job, type PriceItem, type QuickBooksStatus, type Settings } from '../api';
 import { EmptyState, ListSkeleton, PageHeader, Sheet, StatCard, useIsMobile } from '../components/ui';
 import { notifyError, notifyOk, useApi, useInvalidate } from '../hooks';
-import { addDays, day, litres, money, todayIso } from '../format';
+import { addDays, day, litres, money, rate, todayIso } from '../format';
 import { useAuth } from '../auth';
 
 const INV_COLOR: Record<Invoice['status'], string> = { draft: '#64748b', sent: '#2877eb', paid: '#10b981', void: '#94a3b8' };
@@ -66,7 +66,7 @@ function Review() {
       {list.map((j) => (
         <Box key={j.id} className="wt-job" style={{ ['--rail' as string]: '#f97316' }} onClick={() => navigate(`/jobs/${j.id}`)}>
           <Group wrap="nowrap" align="flex-start" gap="sm">
-            <Checkbox checked={picked.includes(j.id)} onClick={(e) => e.stopPropagation()} onChange={() => setPicked(picked.includes(j.id) ? picked.filter((x) => x !== j.id) : [...picked, j.id])} mt={2} />
+            <Checkbox aria-label={`Select job #${j.number}`} checked={picked.includes(j.id)} onClick={(e) => e.stopPropagation()} onChange={() => setPicked(picked.includes(j.id) ? picked.filter((x) => x !== j.id) : [...picked, j.id])} mt={2} />
             <Box style={{ flex: 1, minWidth: 0 }}>
               <Group justify="space-between" wrap="nowrap" gap={8}>
                 <Box style={{ minWidth: 0 }}>
@@ -80,7 +80,7 @@ function Review() {
               </Group>
               <Group gap={6} mt={6} wrap="nowrap" c="orange.7">
                 <IconAlertTriangle size={14} style={{ flex: 'none' }} />
-                <Text size="sm" c="orange.8" lineClamp={mobile ? 3 : 2}>{(j.approval_note ?? '').replace(/^Needs review: /, '')}</Text>
+                <Text size="sm" c="orange" lineClamp={mobile ? 3 : 2}>{(j.approval_note ?? '').replace(/^Needs review: /, '')}</Text>
               </Group>
             </Box>
             {!mobile && (
@@ -244,7 +244,7 @@ function InvoiceDrawer({ id, onClose }: { id: string | null; onClose: () => void
                 </Group>
                 {lines.map((l, k) => (
                   <Group key={k} justify="space-between" wrap="nowrap" gap={8}>
-                    <Text size="sm" c="dimmed" truncate>{l.description} · {Number(l.quantity).toLocaleString('en-CA')} {l.unit === 'litre' ? 'L' : l.unit} × {Number(l.unit_price) < 1 ? `$${Number(l.unit_price).toFixed(4)}` : money(Number(l.unit_price))}</Text>
+                    <Text size="sm" c="dimmed" truncate>{l.description} · {Number(l.quantity).toLocaleString('en-CA')} {l.unit === 'litre' ? 'L' : l.unit} × {rate(l.unit_price)}</Text>
                     <Text size="sm" className="wt-num" style={{ flex: 'none' }}>{money(l.amount)}</Text>
                   </Group>
                 ))}
@@ -335,12 +335,12 @@ export function PriceBook() {
                 <Text size="xs" c="dimmed">{KIND[it.kind]}{it.auto_add ? ' · added to every delivery' : ''}{it.taxable ? '' : ' · tax exempt'}</Text>
                 {Object.keys(it.class_rates ?? {}).length > 0 && (
                   <Text size="xs" c="water" mt={2}>
-                    {Object.entries(it.class_rates!).map(([k, v]) => `${classes.find((c) => c.key === k)?.label ?? k} ${Number(v) < 1 ? `$${Number(v).toFixed(4)}` : money(Number(v))}`).join(' · ')}
+                    {Object.entries(it.class_rates!).map(([k, v]) => `${classes.find((c) => c.key === k)?.label ?? k} ${rate(v)}`).join(' · ')}
                   </Text>
                 )}
               </Box>
               <Box ta="right" style={{ flex: 'none' }}>
-                <Text fw={650} className="wt-num">{Number(it.unit_price) < 1 ? `$${Number(it.unit_price).toFixed(4)}` : money(Number(it.unit_price))}</Text>
+                <Text fw={650} className="wt-num">{rate(it.unit_price)}</Text>
                 <Text size="xs" c="dimmed">per {it.unit}</Text>
               </Box>
             </Group>
@@ -420,12 +420,12 @@ export default function Billing() {
       <SimpleGrid cols={{ base: 2, lg: 4 }} spacing="md" mb="lg">
         <StatCard label="Needs review" value={s?.pending_approvals ?? '—'} hint="Deliveries held by the checks" icon={<IconClockHour4 size={17} />} color="#f97316" />
         <StatCard label="Ready to bill" value={s ? money(s.unbilled_subtotal) : '—'} hint={s ? `${s.unbilled_jobs} approved deliveries` : ''} icon={<IconReceipt2 size={17} />} />
-        <StatCard label="Outstanding" value={s ? money(s.outstanding_total) : '—'} hint={s?.overdue_count ? <Text span size="xs" c="red.6">{s.overdue_count} overdue</Text> : 'Sent, not yet paid'} icon={<IconSend size={17} />} color="#8b5cf6" />
+        <StatCard label="Outstanding" value={s ? money(s.outstanding_total) : '—'} hint={s?.overdue_count ? <Text span size="xs" c="red">{s.overdue_count} overdue</Text> : 'Sent, not yet paid'} icon={<IconSend size={17} />} color="#8b5cf6" />
         <StatCard label="Paid this month" value={s ? money(s.paid_this_month) : '—'} hint={s ? `${s.draft_count} drafts · ${money(s.draft_total)}` : ''} icon={<IconCash size={17} />} color="#10b981" />
       </SimpleGrid>
       <Tabs value={tab} onChange={setTab} keepMounted={false}>
         <Tabs.List mb="md">
-          <Tabs.Tab value="review" rightSection={s?.pending_approvals ? <Badge size="sm" color="orange" circle>{s.pending_approvals}</Badge> : undefined}>Review</Tabs.Tab>
+          <Tabs.Tab value="review" rightSection={s?.pending_approvals ? <Badge size="sm" color="orange" variant="light" circle>{s.pending_approvals}</Badge> : undefined}>Review</Tabs.Tab>
           <Tabs.Tab value="invoices">Invoices</Tabs.Tab>
           <Tabs.Tab value="prices">Price book</Tabs.Tab>
         </Tabs.List>

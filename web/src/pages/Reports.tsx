@@ -77,7 +77,7 @@ export default function Reports() {
           <Card>
             <Title order={4} mb="sm">Truck fills</Title>
             <Text size="xs" c="dimmed" mb="sm">What the driver's meter said against what left the bulk tank during the fill.</Text>
-            <ScrollArea.Autosize mah={440} type="auto">
+            <ScrollArea.Autosize mah={440} type="auto" viewportProps={{ tabIndex: 0, 'aria-label': 'Truck fills' }}>
             <Table.ScrollContainer minWidth={480}>
               <Table fz="sm" verticalSpacing={6}>
                 <Table.Thead><Table.Tr><Table.Th>When</Table.Th><Table.Th>Truck</Table.Th><Table.Th>Driver</Table.Th><Table.Th ta="right">Tank sensor</Table.Th><Table.Th ta="right">Meter</Table.Th></Table.Tr></Table.Thead>
@@ -98,7 +98,7 @@ export default function Reports() {
           <Card>
             <Title order={4} mb="sm">By customer</Title>
             <Text size="xs" c="dimmed" mb="sm">Totals for billing, highest first.</Text>
-            <ScrollArea.Autosize mah={440} type="auto">
+            <ScrollArea.Autosize mah={440} type="auto" viewportProps={{ tabIndex: 0, 'aria-label': 'Totals by customer' }}>
             <Table.ScrollContainer minWidth={380}>
               <Table fz="sm" verticalSpacing={6} highlightOnHover>
                 <Table.Thead><Table.Tr><Table.Th>Customer</Table.Th><Table.Th>Account</Table.Th><Table.Th ta="right">Deliveries</Table.Th><Table.Th ta="right">Litres</Table.Th></Table.Tr></Table.Thead>
@@ -135,17 +135,20 @@ function DailyCard({ days, hasTank, mobile }: { days: DayReport[]; hasTank: bool
           h={mobile ? 240 : 300}
           data={data}
           dataKey="day"
-          series={[...(hasTank ? [{ name: 'Drawn from tank', color: 'cyan.4' }] : []), { name: 'Delivered', color: 'water.6' }]}
+          series={[{ name: 'Delivered', color: 'var(--viz-1)' }, ...(hasTank ? [{ name: 'Drawn from tank', color: 'var(--viz-2)' }] : [])]}
           valueFormatter={(v) => `${Math.round(v).toLocaleString('en-CA')} L`}
           withLegend
           legendProps={{ verticalAlign: 'top', height: 36 }}
           tickLine="none"
           gridAxis="y"
           barProps={{ radius: [4, 4, 0, 0] }}
+          barChartProps={{ barGap: 2 }}
           yAxisProps={{ width: 64, tickFormatter: (v: number) => (v >= 1000 ? `${Math.round(v / 1000)}k` : String(v)) }}
           xAxisProps={{ interval: 'preserveStartEnd', minTickGap: 16 }}
         />
-      ) : (
+      ) : null}
+      {view === 'chart' && hasTank && <GapChart days={days} mobile={mobile} />}
+      {view === 'table' && (
         <Table.ScrollContainer minWidth={640}>
           <Table fz="sm" verticalSpacing={6} striped>
             <Table.Thead><Table.Tr><Table.Th>Day</Table.Th><Table.Th ta="right">Deliveries</Table.Th><Table.Th ta="right">Delivered</Table.Th><Table.Th ta="right">Drawn</Table.Th><Table.Th ta="right">Gap</Table.Th><Table.Th>By truck</Table.Th></Table.Tr></Table.Thead>
@@ -165,6 +168,34 @@ function DailyCard({ days, hasTank, mobile }: { days: DayReport[]; hasTank: bool
         </Table.ScrollContainer>
       )}
     </Card>
+  );
+}
+
+/** The share of drawn water that wasn't delivered, day by day, against the 10% line worth checking. */
+function GapChart({ days, mobile }: { days: DayReport[]; mobile: boolean }) {
+  const data = days.filter((d) => d.unaccounted_pct !== null).map((d) => ({ day: shortDay(d.day), 'Not accounted for': d.unaccounted_pct ?? 0 }));
+  if (data.length < 2) return null;
+  const over = data.filter((d) => d['Not accounted for'] > 10).length;
+  return (
+    <Box mt="lg">
+      <Group justify="space-between" gap="xs" mb={4}>
+        <Text fw={600} size="sm">Not accounted for, % of what was drawn</Text>
+        <Text size="xs" c={over ? 'red' : 'dimmed'}>{over ? `${over} ${over === 1 ? 'day' : 'days'} over 10%` : 'Every day under 10%'}</Text>
+      </Group>
+      <BarChart
+        h={mobile ? 150 : 170}
+        data={data}
+        dataKey="day"
+        series={[{ name: 'Not accounted for', color: 'var(--viz-3)' }]}
+        valueFormatter={(v) => `${v.toFixed(1)}%`}
+        referenceLines={[{ y: 10, label: '10%: worth a look', color: 'gray.6', labelPosition: 'insideTopRight' }]}
+        tickLine="none"
+        gridAxis="y"
+        barProps={{ radius: [4, 4, 0, 0] }}
+        yAxisProps={{ width: 64, tickFormatter: (v: number) => `${v}%` }}
+        xAxisProps={{ interval: 'preserveStartEnd', minTickGap: 16 }}
+      />
+    </Box>
   );
 }
 
@@ -188,7 +219,7 @@ function TankLevel({ tank }: { tank: Tank }) {
           h={220}
           data={data}
           dataKey="t"
-          series={[{ name: 'Level', color: 'cyan.5' }]}
+          series={[{ name: 'Level', color: 'var(--viz-1)' }]}
           curveType="monotone"
           withDots={false}
           yAxisProps={{ domain: [0, 100], width: 44 }}

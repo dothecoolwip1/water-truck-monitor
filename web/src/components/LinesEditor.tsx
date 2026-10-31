@@ -5,7 +5,7 @@ import { IconAlertTriangle, IconCheck, IconCircleCheckFilled, IconPlus, IconRece
 import { Link } from 'react-router-dom';
 import { post, put, type JobDetail, type JobLine, type PriceItem } from '../api';
 import { notifyError, notifyOk, useApi, useInvalidate } from '../hooks';
-import { money } from '../format';
+import { money, rate } from '../format';
 import { useIsMobile } from './ui';
 
 interface LinesResponse {
@@ -158,7 +158,7 @@ export default function LinesEditor({ job }: { job: JobDetail }) {
         <Select
           placeholder="Add a charge…"
           leftSection={<IconPlus size={16} />}
-          data={[...active.map((i) => ({ value: i.id, label: `${i.name} · ${money(Number(i.unit_price))}/${i.unit}` })), { value: '__other', label: 'Other (type your own)' }]}
+          data={[...active.map((i) => ({ value: i.id, label: `${i.name} · ${rate(i.unit_price)}/${i.unit}` })), { value: '__other', label: 'Other (type your own)' }]}
           value={null}
           onChange={(v) => v && addItem(v === '__other' ? null : v)}
           size="sm"
