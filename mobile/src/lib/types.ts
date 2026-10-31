@@ -30,6 +30,7 @@ export interface Job {
   arrived_at: string | null;
   completed_at: string | null;
   delivered_litres: number | null;
+  comment_count?: number;
 }
 
 export interface Truck {
@@ -62,6 +63,26 @@ export interface Today {
   trucks: Truck[];
   tanks: SourceTank[];
   server_time: string;
+  form_fields?: FormField[];
+}
+
+/** A question the office added to the delivery checklist. */
+export interface FormField {
+  key: string;
+  label: string;
+  type: 'text' | 'number' | 'yesno' | 'choice';
+  options?: string[];
+  required?: boolean;
+}
+export type FormValue = string | number | boolean | null;
+
+export interface Comment {
+  id: string;
+  author_id: string;
+  author_name: string;
+  body: string;
+  created_at: string;
+  seen_by?: string[];
 }
 
 export interface PhotoRef {
@@ -89,7 +110,9 @@ export type Op =
       lng?: number | null;
       meter_photo?: PhotoRef | null;
       signature?: PhotoRef | null;
+      form_data?: Record<string, FormValue> | null;
     }
+  | { type: 'comment'; client_id: string; at: string; job_id: string; body: string }
   | { type: 'fill'; client_id: string; started_at: string; ended_at: string; tank_id?: string | null; litres_reported?: number | null }
   | { type: 'gps'; client_id: string; points: GpsPoint[] };
 

@@ -25,7 +25,7 @@ export function parse<T extends z.ZodType>(schema: T, data: unknown): z.infer<T>
   return r.data;
 }
 
-export type Role = 'admin' | 'dispatcher' | 'driver';
+export type Role = 'admin' | 'dispatcher' | 'driver' | 'resident';
 
 export interface AuthUser {
   id: string;

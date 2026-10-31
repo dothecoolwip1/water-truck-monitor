@@ -49,8 +49,9 @@ export default function Reports() {
   const quick = (n: number) => setRange([addDays(todayIso(), -(n - 1)), todayIso()]);
 
   return (
-    <Box p={{ base: 'md', lg: 'lg' }} maw={1400}>
+    <Box maw={1400}>
       <PageHeader
+        eyebrow="Money"
         title="Reports"
         subtitle={`${day(from)} to ${day(to)}`}
         actions={<Button variant="default" component="a" href={authedUrl(`/exports/deliveries.csv?${q}`)} leftSection={<IconDownload size={16} />}>Export CSV</Button>}
@@ -62,7 +63,7 @@ export default function Reports() {
         <Button variant="subtle" size="compact-sm" onClick={() => quick(30)}>30 days</Button>
       </Group>
 
-      <SimpleGrid cols={{ base: 2, md: 4 }} spacing="sm" mb="md">
+      <SimpleGrid cols={{ base: 2, md: 4 }} spacing="md" mb="lg">
         <StatCard label="Delivered" value={compactLitres(delivered)} hint={`${jobs.toLocaleString('en-CA')} deliveries`} icon={<IconDroplet size={20} />} />
         <StatCard label="Drawn from tank" value={drawn === null ? 'No sensor' : compactLitres(drawn)} hint="from the level sensor" icon={<IconGauge size={20} />} color="cyan" />
         <StatCard label="Not accounted for" value={gap === null ? '—' : compactLitres(gap)} hint={gapPct === null ? '' : `${gapPct.toFixed(1)}% of drawn`} icon={<IconAlertTriangle size={20} />} color={gapPct !== null && gapPct > 10 ? 'red' : 'orange'} />

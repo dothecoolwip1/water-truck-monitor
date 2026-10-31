@@ -15,6 +15,10 @@ import ingestRoutes from './routes/ingest.js';
 import reportRoutes from './routes/reports.js';
 import liveRoutes from './routes/live.js';
 import fileRoutes from './routes/files.js';
+import billingRoutes from './routes/billing.js';
+import collabRoutes from './routes/collab.js';
+import recurringRoutes from './routes/recurring.js';
+import portalRoutes from './routes/portal.js';
 import mapRoutes from './routes/map.js';
 
 export interface AppDeps {
@@ -75,6 +79,10 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   await app.register(liveRoutes, { prefix: '/api' });
   await app.register(fileRoutes, { prefix: '/api' });
   await app.register(mapRoutes, { prefix: '/api' });
+  await app.register(billingRoutes, { prefix: '/api' });
+  await app.register(collabRoutes, { prefix: '/api' });
+  await app.register(recurringRoutes, { prefix: '/api' });
+  await app.register(portalRoutes, { prefix: '/api/public' });
 
   if ((deps.serveWeb ?? true) && fs.existsSync(config.webDist)) {
     // Loaded only when serving the web app: Vercel's function runtime can't load

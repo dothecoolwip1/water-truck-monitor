@@ -7,6 +7,9 @@ import { insideGeofence } from '../lib/geo.js';
 import { arriveJob, completeJob, JOB_SELECT, startJob } from '../lib/jobs.js';
 import { HttpError, optionalText, parse, requireRole, uuid, type AuthUser } from '../http.js';
 import { config } from '../config.js';
+import { addComment, listComments } from '../lib/comments.js';
+import { getSettings } from '../lib/settings.js';
+import { ensureRecurring } from '../lib/recurring.js';
 
 const driverOnly = requireRole('driver', 'admin');
 
@@ -33,7 +36,9 @@ const op = z.discriminatedUnion('type', [
     lng: z.number().nullish(),
     meter_photo: file.nullish(),
     signature: file.nullish(),
+    form_data: z.record(z.string(), z.union([z.string().max(500), z.number(), z.boolean(), z.null()])).nullish(),
   }),
+  z.object({ type: z.literal('comment'), client_id: clientId, at, job_id: uuid, body: z.string().trim().min(1).max(4000) }),
   z.object({
     type: z.literal('fill'),
     client_id: clientId,
@@ -99,7 +104,8 @@ async function assertOwnJob(c: pg.PoolClient, jobId: string, user: AuthUser) {
 const routes: FastifyPluginAsync = async (app) => {
   app.get('/today', { preHandler: driverOnly }, async (req) => {
     const driverId = req.user.id;
-    const [shift, jobs, trucks, tanks] = await Promise.all([
+    await ensureRecurring(app.pool, undefined, config.timezone);
+    const [shift, jobs, trucks, tanks, settings] = await Promise.all([
       openShift(app.pool, driverId),
       // Today's jobs plus anything older that's still open, so nothing slips off the list.
       app.pool.query(
@@ -112,8 +118,18 @@ const routes: FastifyPluginAsync = async (app) => {
       ),
       app.pool.query('select id, name, plate, capacity_l, last_meter_reading from trucks where active order by name'),
       app.pool.query('select id, name, lat, lng, geofence_m from source_tanks order by name'),
+      getSettings(app.pool),
     ]);
-    return { shift, jobs: jobs.rows, trucks: trucks.rows, tanks: tanks.rows, server_time: new Date().toISOString() };
+    return {
+      shift, jobs: jobs.rows, trucks: trucks.rows, tanks: tanks.rows, server_time: new Date().toISOString(),
+      form_fields: settings.form.fields,
+    };
+  });
+
+  app.get('/jobs/:id/comments', { preHandler: driverOnly }, async (req) => {
+    const id = parse(uuid, (req.params as { id: string }).id);
+    await tx(app.pool, (c) => assertOwnJob(c, id, req.user));
+    return listComments(app.pool, id, req.user.id);
   });
 
   app.get('/history', { preHandler: driverOnly }, async (req) => {
@@ -232,6 +248,7 @@ const routes: FastifyPluginAsync = async (app) => {
               recorded_at: new Date(o.at),
               shift_id: shift?.id ?? null,
               truck_id: shift?.truck_id ?? null,
+              form_data: o.form_data ?? null,
             },
             userId,
           );
@@ -256,6 +273,13 @@ const routes: FastifyPluginAsync = async (app) => {
       }
       case 'gps': {
         await ingestGps(o.points, userId);
+        return;
+      }
+      case 'comment': {
+        await tx(app.pool, async (c) => {
+          await assertOwnJob(c, o.job_id, user);
+          await addComment(app, c, { jobId: o.job_id, authorId: userId, authorName: user.name, body: o.body, clientId: o.client_id, at: new Date(o.at) });
+        });
         return;
       }
     }

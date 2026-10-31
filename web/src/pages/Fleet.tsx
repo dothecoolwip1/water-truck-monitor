@@ -72,9 +72,9 @@ export default function Fleet() {
         : tab === 'tanks' && isAdmin ? <Button leftSection={<IconPlus size={16} />} onClick={() => setTank('new')}>Add tank sensor</Button> : null;
 
   return (
-    <Box p={{ base: 'md', lg: 'lg' }} maw={1200}>
-      <PageHeader title="Fleet" subtitle="Trucks, people and the bulk water tank" actions={addButton} />
-      <Tabs value={tab} onChange={setTab} variant="pills" radius="xl" mb="md">
+    <Box maw={1200}>
+      <PageHeader eyebrow="Setup" title="Fleet & people" subtitle="Trucks, people and the bulk water tank" actions={addButton} />
+      <Tabs value={tab} onChange={setTab} mb="lg">
         <Tabs.List>
           <Tabs.Tab value="trucks" leftSection={<IconTruck size={16} />}>Trucks</Tabs.Tab>
           <Tabs.Tab value="people" leftSection={<IconUsers size={16} />}>People</Tabs.Tab>

@@ -6,12 +6,14 @@ import { Notifications } from '@mantine/notifications';
 import { ModalsProvider } from '@mantine/modals';
 import { DatesProvider } from '@mantine/dates';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import '@fontsource-variable/inter';
+import '@fontsource-variable/geist';
+import '@fontsource-variable/geist-mono';
 import '@mantine/core/styles.css';
 import '@mantine/dates/styles.css';
 import '@mantine/notifications/styles.css';
 import '@mantine/charts/styles.css';
 import '@mantine/dropzone/styles.css';
+import '@mantine/spotlight/styles.css';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './app.css';
 import App from './App';
@@ -29,7 +31,7 @@ createRoot(document.getElementById('root')!).render(
     <MantineProvider theme={theme} defaultColorScheme="auto">
       <DatesProvider settings={{ firstDayOfWeek: 0, locale: 'en' }}>
         <QueryClientProvider client={queryClient}>
-          <Notifications position="top-center" />
+          <Notifications position="top-center" limit={3} />
           <ModalsProvider>
             <BrowserRouter>
               <AuthProvider>

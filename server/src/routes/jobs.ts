@@ -4,6 +4,8 @@ import { tx } from '../db.js';
 import { audit, diff } from '../lib/audit.js';
 import { completeJob, getJob, JOB_SELECT, notifyAssignment } from '../lib/jobs.js';
 import { ticketPdf } from '../lib/pdf.js';
+import { ensureRecurring } from '../lib/recurring.js';
+import { config } from '../config.js';
 import { badRequest, HttpError, isoDate, office, optionalText, parse, uuid } from '../http.js';
 
 const jobFields = z.object({
@@ -34,10 +36,14 @@ const routes: FastifyPluginAsync = async (app) => {
         driver_id: uuid.optional(),
         customer_id: uuid.optional(),
         unscheduled: z.enum(['true', 'false']).optional(),
+        tag: z.string().max(50).optional(),
+        approval: z.enum(['pending', 'approved', 'rejected']).optional(),
+        q: z.string().max(100).optional(),
         limit: z.coerce.number().int().min(1).max(2000).default(500),
       }),
       req.query,
     );
+    if (q.date || q.to) await ensureRecurring(app.pool, q.date ?? q.to, config.timezone);
     const where: string[] = [];
     const vals: unknown[] = [];
     const add = (sql: string, v: unknown) => {
@@ -50,6 +56,9 @@ const routes: FastifyPluginAsync = async (app) => {
     if (q.status) add('j.status = any(?::job_status[])', q.status.split(','));
     if (q.driver_id) add('j.driver_id = ?', q.driver_id);
     if (q.customer_id) add('j.customer_id = ?', q.customer_id);
+    if (q.tag) add('? = any(j.tags)', q.tag);
+    if (q.approval) add('j.approval_status = ?', q.approval);
+    if (q.q) add(`(c.name ilike '%' || ? || '%' or s.label ilike '%' || $${vals.length + 1} || '%' or j.number::text = $${vals.length + 1})`, q.q);
     if (q.unscheduled === 'true') where.push(`(j.scheduled_date is null or j.driver_id is null) and j.status = 'requested'`);
     vals.push(q.limit);
     const { rows } = await app.pool.query(
@@ -95,6 +104,7 @@ const routes: FastifyPluginAsync = async (app) => {
           body.driver_id ?? null, body.truck_id ?? null, body.notes ?? null, body.tags ?? null, statusFor(body), req.user.id],
       );
       await audit(c, 'job', rows[0].id, 'created', req.user.id, body);
+      await c.query('insert into job_followers (job_id, user_id) values ($1,$2) on conflict do nothing', [rows[0].id, req.user.id]);
       return getJob(c, rows[0].id);
     });
     app.bus.publish({ type: 'job', jobId: job.id, status: job.status });
@@ -227,7 +237,7 @@ const routes: FastifyPluginAsync = async (app) => {
       req.body,
     );
     const job = await tx(app.pool, async (c) => {
-      await completeJob(c, id, { ...body, recorded_at: body.delivered_at ? new Date(body.delivered_at) : new Date() }, req.user.id);
+      await completeJob(c, id, { ...body, recorded_at: body.delivered_at ? new Date(body.delivered_at) : new Date() }, req.user.id, { office: true });
       await audit(c, 'job', id, 'entered_by_office', req.user.id);
       return getJob(c, id);
     });

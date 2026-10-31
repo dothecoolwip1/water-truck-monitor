@@ -53,7 +53,7 @@ export const STATUS_LABEL: Record<JobStatus, string> = {
 export const STATUS_MANTINE: Record<JobStatus, string> = {
   requested: 'yellow',
   scheduled: 'water',
-  en_route: 'grape',
+  en_route: 'violet',
   arrived: 'orange',
   completed: 'teal',
   cancelled: 'gray',
@@ -61,10 +61,24 @@ export const STATUS_MANTINE: Record<JobStatus, string> = {
 
 /** Hex colours for the map, readable on satellite imagery. */
 export const STATUS_HEX: Record<JobStatus, string> = {
-  requested: '#fab005',
-  scheduled: '#339af0',
-  en_route: '#be4bdb',
-  arrived: '#fd7e14',
-  completed: '#20c997',
-  cancelled: '#adb5bd',
+  requested: '#f59e0b',
+  scheduled: '#2877eb',
+  en_route: '#8b5cf6',
+  arrived: '#f97316',
+  completed: '#10b981',
+  cancelled: '#94a3b8',
 };
+
+export const initials = (name: string | null | undefined) =>
+  (name ?? '?').split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
+
+/** A stable, pleasant colour per person, for avatars. */
+const AVATAR = ['#2877eb', '#10b981', '#8b5cf6', '#f97316', '#0ea5e9', '#e11d48', '#14b8a6', '#a855f7'];
+export function personColor(key: string | null | undefined): string {
+  let h = 0;
+  for (const ch of key ?? '') h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return AVATAR[h % AVATAR.length];
+}
+
+export const money = (v: number | string | null | undefined, digits = 2) =>
+  v === null || v === undefined || v === '' ? '—' : Number(v).toLocaleString('en-CA', { style: 'currency', currency: 'CAD', minimumFractionDigits: digits, maximumFractionDigits: Math.max(digits, 2) });

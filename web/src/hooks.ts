@@ -24,7 +24,7 @@ export function notifyOk(message: string) {
 }
 
 export interface LiveMessage {
-  type: 'job' | 'position' | 'shift' | 'tank';
+  type: 'job' | 'position' | 'shift' | 'tank' | 'comment' | 'notification';
   [k: string]: unknown;
 }
 
@@ -39,7 +39,7 @@ export function useLive(onEvent: (e: LiveMessage) => void) {
     if (!token) return;
     const es = new EventSource(`/api/live/stream?token=${encodeURIComponent(token)}`);
     const relay = (ev: MessageEvent) => handler.current(JSON.parse(ev.data));
-    for (const t of ['job', 'position', 'shift', 'tank']) es.addEventListener(t, relay as EventListener);
+    for (const t of ['job', 'position', 'shift', 'tank', 'comment', 'notification']) es.addEventListener(t, relay as EventListener);
     es.onopen = () => setConnected(true);
     es.onerror = () => setConnected(false);
     return () => es.close();
