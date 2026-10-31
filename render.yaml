@@ -1,0 +1,27 @@
+# Render blueprint: one web service plus a managed Postgres database.
+# In Render, choose New > Blueprint and point it at this repository.
+services:
+  - type: web
+    name: water-delivery
+    runtime: docker
+    plan: starter
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: water-delivery-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: APP_TIMEZONE
+        value: America/Edmonton
+      - key: ORG_NAME
+        value: Water Delivery
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+databases:
+  - name: water-delivery-db
+    plan: basic-256mb
+    postgresMajorVersion: "16"
